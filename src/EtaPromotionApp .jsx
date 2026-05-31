@@ -672,6 +672,7 @@ function HistoryPage() {
 }
 
 
+function Loading() {
   return <div style={{ ...glassCard(), textAlign: "center", fontSize: 14, fontWeight: 600, color: C.sub, position: "relative", zIndex: 1 }}>불러오는 중...</div>;
 }
 function fmt(iso) { try { return new Date(iso).toLocaleString("ko-KR"); } catch { return ""; } }
