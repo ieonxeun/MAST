@@ -7,7 +7,7 @@ import { supabase, PROOF_BUCKET } from "./supabaseClient.js";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const keyOf = (m) => `${m.name}|${m.gi}|${m.school}`;
-const shortSchool = (s) => s.replace(/대학교.*$/, "대").replace(/\s.*$/, "").slice(0, 6);
+const shortSchool = (s) => s.replace(/대학교.*$/, "대").replace(/ㅇs.*$/, "").slice(0, 6);
 
 const ADMIN_CODE = import.meta.env.VITE_ADMIN_CODE || "MAST2026";
 const ST = { NONE: "none", PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" };
@@ -23,20 +23,35 @@ const FONT = '-apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic 
 const PAGE_BG = "linear-gradient(160deg,#e8eff9 0%,#f1ecf6 45%,#f6f1e9 100%)";
 
 export default function EtaPromotionApp() {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("mast_session");
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+
+  const handleLogin = (s) => {
+    sessionStorage.setItem("mast_session", JSON.stringify(s));
+    setSession(s);
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem("mast_session");
+    setSession(null);
+  };
   return (
     <div style={{ minHeight: "100vh", background: PAGE_BG, fontFamily: FONT, color: C.ink }}>
       <Blobs />
       <div style={{ position: "relative", maxWidth: 880, margin: "0 auto", padding: "0 20px 64px" }}>
-        {!session ? <Login onLogin={setSession} /> : (
+        {!session ? <Login onLogin={handleLogin} /> : (
           <>
-            <TopBar session={session} onLogout={() => setSession(null)} />
+            <TopBar session={session} onLogout={handleLogout} />
             {session.role === "admin" ? <AdminPage session={session} /> : <MemberPage session={session} />}
           </>
         )}
       </div>
     </div>
-  );
+);
 }
 
 function Blobs() {
@@ -265,8 +280,9 @@ function UploadForm({ myKey, today, rejected, existingId, onDone }) {
     setBusy(true);
     try {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const path = `${today}/${myKey.replace(/[^a-zA-Z0-9가-힣]/g, "_")}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from(PROOF_BUCKET).upload(path, file, { upsert: true });
+      const safeKey = encodeURIComponent(myKey).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+      const randomId = Math.random().toString(36).slice(2, 8);
+      const path = `${today}/${safeKey}_${Date.now()}_${randomId}.${ext}ㄹ
       if (upErr) throw upErr;
       const { data: pub } = supabase.storage.from(PROOF_BUCKET).getPublicUrl(path);
       const row = {
