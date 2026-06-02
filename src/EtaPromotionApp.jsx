@@ -30,6 +30,16 @@ function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); }
   catch(e) { return ""; }
 }
+function useWindowWidth() {
+  var _w = useState(typeof window !== "undefined" ? window.innerWidth : 1024);
+  var winW = _w[0], setWinW = _w[1];
+  useEffect(function() {
+    function onResize() { setWinW(window.innerWidth); }
+    window.addEventListener("resize", onResize);
+    return function() { window.removeEventListener("resize", onResize); };
+  }, []);
+  return winW;
+}
 
 var ST = { PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" };
 // "반려"는 UI 라벨에서 사라지고 "미완료"로 통합. 부원 상세에서만 특이사항으로 표시.
@@ -649,6 +659,8 @@ function MemberProfile(props) {
 ═══════════════════════════════════════════════════ */
 function AdminApp(props) {
   var _tab = useState("dashboard"), tab = _tab[0], setTab = _tab[1];
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var navItems = [
     { key: "dashboard", label: "대시보드", icon: <NavHome /> },
     { key: "mission", label: "미션 관리", icon: <NavList /> },
@@ -658,8 +670,31 @@ function AdminApp(props) {
   ];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F4F7FB", fontFamily: FONT, display: "flex" }}>
-      <div style={{ width: 210, background: "#fff", borderRight: "1px solid #E5EAF2", display: "flex", flexDirection: "column", minHeight: "100vh", padding: "24px 0", flexShrink: 0 }}>
+    <div style={{ minHeight: "100vh", background: "#F4F7FB", fontFamily: FONT, display: isMobile ? "block" : "flex" }}>
+      {isMobile && (
+        <div style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(255,255,255,0.96)", borderBottom: "1px solid #E5EAF2", padding: "12px 14px 10px", boxShadow: "0 4px 18px rgba(60,100,200,0.06)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <img src={mastLogo} alt="MAST" style={{ height: 22, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 800, color: INK, whiteSpace: "nowrap" }}>관리자</span>
+            </div>
+            <button onClick={props.onLogout} style={btnSmall({ width: "auto", background: "#F8FAFF", color: SUB, border: "1px solid #E5EAF2", whiteSpace: "nowrap" })}>로그아웃</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+            {navItems.map(function(it) {
+              var active = tab === it.key;
+              return (
+                <button key={it.key} onClick={function() { setTab(it.key); }}
+                  style={{ border: "1px solid " + (active ? BLUE : "#E5EAF2"), borderRadius: 999, background: active ? "#EEF3FB" : "#fff", cursor: "pointer", fontFamily: FONT, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", color: active ? BLUE : "#4A5568", fontWeight: active ? 800 : 700, fontSize: 12, whiteSpace: "nowrap", flexShrink: 0 }}>
+                  <span style={{ display: "flex" }}>{it.icon}</span>
+                  {it.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div style={{ width: 210, background: "#fff", borderRight: "1px solid #E5EAF2", display: isMobile ? "none" : "flex", flexDirection: "column", minHeight: "100vh", padding: "24px 0", flexShrink: 0 }}>
         <div style={{ padding: "0 22px 26px" }}>
           <img src={mastLogo} alt="MAST" style={{ height: 26, marginBottom: 4 }} />
           <div style={{ fontSize: 11, color: SUB, fontWeight: 600 }}>관리자 시스템</div>
@@ -681,7 +716,7 @@ function AdminApp(props) {
         </div>
       </div>
 
-      <div style={{ flex: 1, padding: "24px 28px", overflow: "auto", minHeight: "100vh" }}>
+      <div style={{ flex: 1, padding: isMobile ? "16px 14px 28px" : "24px 28px", overflow: "auto", minHeight: isMobile ? "auto" : "100vh", maxWidth: isMobile ? 480 : "none", margin: isMobile ? "0 auto" : 0 }}>
         {tab === "dashboard" && <AdminDashboard onTab={setTab} />}
         {tab === "mission" && <AdminMission session={props.session} />}
         {tab === "members" && <AdminMembers />}
@@ -693,6 +728,8 @@ function AdminApp(props) {
 }
 
 function AdminDashboard(props) {
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var today = todayKST();
   var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
   var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
@@ -747,7 +784,7 @@ function AdminDashboard(props) {
       <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 4 }}>관리자 대시보드</div>
       <div style={{ fontSize: 13, color: SUB, marginBottom: 22 }}>오늘의 홍보 미션 현황을 한눈에 확인하세요.</div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: isMobile ? 10 : 16, marginBottom: 20 }}>
         <div style={card({ background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", color: "#fff", position: "relative", overflow: "visible" })}>
           <img src={megaphoneImg} alt="" style={{ position: "absolute", right: -10, top: -20, width: 100, height: "auto", filter: "drop-shadow(0 8px 16px rgba(0,0,0,0.15))" }} />
           <div style={{ position: "relative", zIndex: 1 }}>
@@ -757,7 +794,7 @@ function AdminDashboard(props) {
           </div>
         </div>
         <div style={card({ background: notSubmitted.length > 0 ? "#FFF5F5" : "#F0FAF5", cursor: "pointer", position: "relative", display: "flex", alignItems: "center", gap: 14 })} onClick={function() { props.onTab("uncert"); }}>
-          {notSubmitted.length > 0 && <img src={sirenImg} alt="" style={{ height: 110, width: "auto", flexShrink: 0, filter: "drop-shadow(0 8px 16px rgba(224,72,72,0.25))" }} />}
+          {notSubmitted.length > 0 && <img src={sirenImg} alt="" style={{ height: isMobile ? 72 : 110, width: "auto", flexShrink: 0, filter: "drop-shadow(0 8px 16px rgba(224,72,72,0.25))" }} />}
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 11, color: SUB, marginBottom: 4, fontWeight: 600 }}>미제출자</div>
             <div style={{ fontSize: 32, fontWeight: 900, color: notSubmitted.length > 0 ? "#E04848" : "#10A26A", marginBottom: 4 }}>{notSubmitted.length}명</div>
@@ -771,7 +808,7 @@ function AdminDashboard(props) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: isMobile ? 10 : 16, marginBottom: 20 }}>
         <ListPanel title={"인증 완료 (" + approvedProofs.length + "명)"} titleColor="#10A26A">
           {approvedProofs.length === 0 ? <Empty /> : approvedProofs.map(function(p) {
             return <ListRow key={p.id} name={p.member_name} sub={fmtTime(p.submitted_at) + " 인증"} badge={<IconCheck color="#10A26A" />} />;
@@ -804,7 +841,7 @@ function AdminDashboard(props) {
 
       <div style={card()}>
         <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 14 }}>빠른 기능</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12 }}>
           {[
             { icon: <IconClipboard />, label: "미션 생성", tab: "mission" },
             { icon: <IconUsers />, label: "부원 관리", tab: "members" },
@@ -813,9 +850,9 @@ function AdminDashboard(props) {
           ].map(function(q) {
             return (
               <button key={q.tab} onClick={function() { props.onTab(q.tab); }}
-                style={{ border: "1px solid #E5EAF2", borderRadius: 14, padding: "18px 12px", background: "#F8FAFF", cursor: "pointer", fontFamily: FONT, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                style={{ border: "1px solid #E5EAF2", borderRadius: 14, padding: isMobile ? "14px 8px" : "18px 12px", background: "#F8FAFF", cursor: "pointer", fontFamily: FONT, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 {q.icon}
-                <span style={{ fontSize: 12, fontWeight: 700, color: INK }}>{q.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: INK, whiteSpace: "nowrap" }}>{q.label}</span>
               </button>
             );
           })}
@@ -851,6 +888,8 @@ function Empty() { return <div style={{ padding: 18, fontSize: 13, color: SUB, t
 
 /* ─── 관리자 미션 관리 (수정·삭제 포함) ─── */
 function AdminMission(props) {
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var today = todayKST();
   var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
   var _members = useState([]), members = _members[0], setMembers = _members[1];
@@ -956,7 +995,7 @@ function AdminMission(props) {
   return (
     <div>
       <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 20 }}>미션 관리</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 12 : 20 }}>
         <div style={card()}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
             <div style={{ fontSize: 16, fontWeight: 800 }}>{mission ? "오늘 미션 수정" : "오늘 미션 등록"}</div>
@@ -1041,6 +1080,8 @@ function AdminMission(props) {
 
 /* ─── 관리자 부원 관리 (추가·수정·삭제, 상세 모달) ─── */
 function AdminMembers() {
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var _members = useState([]), members = _members[0], setMembers = _members[1];
   var _proofStats = useState({}), proofStats = _proofStats[0], setProofStats = _proofStats[1];
   var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
@@ -1084,15 +1125,44 @@ function AdminMembers() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: 16, flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 0 }}>
         <div style={{ fontSize: 24, fontWeight: 900, color: INK }}>부원 관리</div>
-        <button onClick={function() { setShowAdd(true); }} style={btnPrimary({ width: "auto", padding: "10px 18px", fontSize: 14 })}>+ 부원 추가</button>
+        <button onClick={function() { setShowAdd(true); }} style={btnPrimary({ width: isMobile ? "100%" : "auto", padding: "10px 18px", fontSize: 14 })}>+ 부원 추가</button>
       </div>
       <div style={{ marginBottom: 14 }}>
-        <input style={Object.assign({}, aInput(), { maxWidth: 320 })} value={query} placeholder="이름/학교/기수 검색" onChange={function(e) { setQuery(e.target.value); }} />
+        <input style={Object.assign({}, aInput(), { maxWidth: isMobile ? "none" : 320 })} value={query} placeholder="이름/학교/기수 검색" onChange={function(e) { setQuery(e.target.value); }} />
       </div>
       <div style={{ fontSize: 12, color: SUB, marginBottom: 10 }}>부원을 클릭하면 상세 인증 이력을 볼 수 있습니다.</div>
-      {loading ? <div style={{ color: SUB }}>불러오는 중...</div> : (
+      {loading ? <div style={{ color: SUB }}>불러오는 중...</div> : isMobile ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map(function(m) {
+            var k = keyOf(m);
+            var st = proofStats[k] || { total: 0, approved: 0 };
+            var rate = st.total > 0 ? Math.round(st.approved / st.total * 100) : 0;
+            return (
+              <div key={k} style={card({ padding: 16 })}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div onClick={function() { setDetail(m); }} style={{ fontWeight: 900, fontSize: 15, color: BLUE, cursor: "pointer", whiteSpace: "nowrap" }}>{m.name}</div>
+                    <div style={{ fontSize: 12, color: SUB, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.gi + " · " + m.school}</div>
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: BLUE, whiteSpace: "nowrap" }}>{st.approved}회</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                  <div style={{ height: 6, background: "#F1F4F9", borderRadius: 999, flex: 1 }}>
+                    <div style={{ height: 6, background: rate >= 80 ? "#10A26A" : rate >= 50 ? BLUE : "#E05A00", borderRadius: 999, width: rate + "%" }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: SUB, fontWeight: 800, whiteSpace: "nowrap" }}>{rate}%</div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <button onClick={function() { setEditing(m); }} style={btnSmall({ background: "#F0F4FB", color: BLUE, padding: "8px 10px" })}>수정</button>
+                  <button onClick={function() { deleteMember(m); }} style={btnSmall({ background: "#FDECEC", color: "#E04848", padding: "8px 10px" })}>삭제</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
         <div style={card({ padding: 0, overflow: "hidden" })}>
           <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.8fr 0.8fr 0.8fr 1.2fr 1fr", padding: "13px 20px", borderBottom: "1px solid #F1F4F9", background: "#F8FAFF" }}>
             {["이름", "학교", "기수", "총 수행", "인증률", "관리"].map(function(h) {
@@ -1283,6 +1353,8 @@ function StatMini(props) {
 
 /* ─── 관리자 인증 현황 (개별 삭제 포함) ─── */
 function AdminCerts() {
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var today = todayKST();
   var _selDate = useState(today), selDate = _selDate[0], setSelDate = _selDate[1];
   var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
@@ -1326,9 +1398,9 @@ function AdminCerts() {
   return (
     <div>
       <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 16 }}>인증 현황</div>
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18 }}>
+      <div style={{ display: "flex", gap: 14, alignItems: isMobile ? "stretch" : "flex-end", marginBottom: 18, flexDirection: isMobile ? "column" : "row" }}>
         <AField label="날짜 선택">
-          <input style={Object.assign({}, aInput(), { width: 180 })} type="date" value={selDate} onChange={function(e) { setSelDate(e.target.value); }} />
+          <input style={Object.assign({}, aInput(), { width: isMobile ? "100%" : 180 })} type="date" value={selDate} onChange={function(e) { setSelDate(e.target.value); }} />
         </AField>
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "#10A26A", background: "#E6F8EF", padding: "5px 14px", borderRadius: 999 }}>완료 {approved}</span>
@@ -1344,7 +1416,7 @@ function AdminCerts() {
             var parts = k.split("|");
             var status = proof ? proof.status : "none";
             return (
-              <div key={k} style={card({ display: "flex", alignItems: "center", gap: 14, padding: 16 })}>
+              <div key={k} style={card({ display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 14, padding: 16, flexDirection: isMobile ? "column" : "row" })}>
                 <div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, flexShrink: 0 }}>{parts[0].slice(0, 1)}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 800 }}>{parts[0]}</div>
@@ -1380,6 +1452,8 @@ function AdminCerts() {
 }
 
 function AdminUncert() {
+  var winW = useWindowWidth();
+  var isMobile = winW < 768;
   var today = todayKST();
   var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
   var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
@@ -1431,7 +1505,7 @@ function AdminUncert() {
             var p = proofs.find(function(p) { return p.member_key === keyOf(m); });
             var status = p ? p.status : "none";
             return (
-              <div key={keyOf(m)} style={card({ display: "flex", alignItems: "center", gap: 14, padding: 16, background: status === "none" || status === ST.REJECTED ? "#FFF5F5" : "#FFF" })}>
+              <div key={keyOf(m)} style={card({ display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 14, padding: 16, background: status === "none" || status === ST.REJECTED ? "#FFF5F5" : "#FFF", flexDirection: isMobile ? "column" : "row" })}>
                 <IconDot color={status === ST.PENDING ? "#3B72E8" : "#E04848"} size={16} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 800, color: INK }}>{m.name}</div>
@@ -1557,7 +1631,7 @@ function IconInput(props) {
 }
 
 function card(extra) { return Object.assign({ background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderRadius: 24, padding: 20, boxShadow: "0 8px 32px rgba(100,120,255,0.08)" }, extra); }
-function inputSt() { return { width: "100%", boxSizing: "border-box", border: "none", borderRadius: 22, padding: "18px 20px 18px 38px", fontSize: 15, fontFamily: FONT, color: INK, background: "rgba(255,255,255,0.92)", outline: "none", boxShadow: "0 4px 14px rgba(60,100,200,0.08)" }; }
+function inputSt() { return { width: "100%", boxSizing: "border-box", border: "none", borderRadius: 22, padding: "18px 20px 18px 38px", fontSize: 15, fontFamily: FONT, color: INK, background: "rgba(255,255,255,0.92)", outline: "none", boxShadow: "0 4px 14px rgba(60,100,200,0.08)", textAlign: "center" }; }
 function aInput() { return { width: "100%", boxSizing: "border-box", border: "1px solid #DDE4F0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontFamily: FONT, color: INK, background: "#fff", outline: "none" }; }
 function btnPrimary(extra) { return Object.assign({ border: "none", borderRadius: 14, padding: "15px 0", fontSize: 16, fontWeight: 800, cursor: "pointer", fontFamily: FONT, width: "100%", background: "linear-gradient(135deg,#5C8AE8,#3B72E8)", color: "#fff", boxShadow: "0 8px 22px rgba(59,114,232,0.35)" }, extra); }
 function btnGhost(extra) { return Object.assign({ border: "1px solid #E5EAF2", borderRadius: 14, padding: "13px 0", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: FONT, width: "100%", background: "#F8FAFF", color: SUB }, extra); }
