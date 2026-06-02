@@ -1,719 +1,1768 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase, PROOF_BUCKET } from "./supabaseClient.js";
+import mastLogo from "./assets/mast-logo.svg";
+import megaphoneImg from "./assets/megaphone.png";
+import cameraImg from "./assets/camera.png";
+import successCheckImg from "./assets/success-check.png";
+import sirenImg from "./assets/siren.png";
 
-/* ================================================================== *
- * MAST 에타 홍보 게시글 관리 시스템 — Supabase 연결 버전
- * ================================================================== */
+var ADMIN_CODE = import.meta.env.VITE_ADMIN_CODE || "mast2026!";
+var MISSION_BUCKET = "missions";
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const keyOf = (m) => `${m.name}|${m.gi}|${m.school}`;
-const shortSchool = (s) => s.replace(/대학교.*$/, "대").replace(/ㅇs.*$/, "").slice(0, 6);
+function todayKST() {
+  var now = new Date();
+  var kst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  return kst.getFullYear() + "-" + String(kst.getMonth() + 1).padStart(2, "0") + "-" + String(kst.getDate()).padStart(2, "0");
+}
+function keyOf(m) { return m.name + "|" + m.gi + "|" + m.school; }
+function normalize(s) { return (s || "").replace(/\s/g, "").toLowerCase(); }
+function schoolMatch(input, dbSchool) {
+  var a = normalize(input), b = normalize(dbSchool);
+  return a === b || b.startsWith(a) || a.startsWith(b);
+}
+function fmtDate(iso) {
+  if (!iso) return "";
+  try { return new Date(iso).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric", weekday: "short" }); }
+  catch(e) { return iso; }
+}
+function fmtTime(iso) {
+  if (!iso) return "";
+  try { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); }
+  catch(e) { return ""; }
+}
 
-const ADMIN_CODE = import.meta.env.VITE_ADMIN_CODE || "MAST2026";
-const ST = { NONE: "none", PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" };
-
-const C = {
-  ink: "#1f2d44", ink2: "#2c3550", sub: "#5d6678", sub2: "#6b86b3", hint: "#8a96ab",
-  line: "#d8e0ec", blue: "#5a86c9", blueDeep: "#2f5fa3", blueSoft: "#e1ebf9", blueSoft2: "#dde9fa",
-  done: "#0f8a66", doneSoft: "#e0f3ec", warn: "#9a5e16", warnSoft: "#f5e8cd",
-  miss: "#a32d2d", missSoft: "#fbe6e6", rose: "#c0506a",
-  white78: "rgba(255,255,255,0.78)", white70: "rgba(255,255,255,0.7)",
+var ST = { PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" };
+// "반려"는 UI 라벨에서 사라지고 "미완료"로 통합. 부원 상세에서만 특이사항으로 표시.
+var stLabel = function(s) { return s === ST.APPROVED ? "인증 완료" : s === ST.PENDING ? "제출됨" : "미완료"; };
+var stColor = function(s) { return s === ST.APPROVED ? "#10A26A" : s === ST.PENDING ? "#3B72E8" : "#E04848"; };
+var stBg   = function(s) { return s === ST.APPROVED ? "#E6F8EF" : s === ST.PENDING ? "#E8F0FE" : "#FDECEC"; };
+var stNote = function(s) {
+  if (s === ST.APPROVED) return "관리자 승인 완료";
+  if (s === ST.PENDING) return "제출 후 검토 대기";
+  if (s === ST.REJECTED) return "사진 반려됨 (재업로드 필요)";
+  return "아직 제출 안 함";
 };
-const FONT = '-apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-const PAGE_BG = "linear-gradient(160deg,#e8eff9 0%,#f1ecf6 45%,#f6f1e9 100%)";
 
-export default function EtaPromotionApp() {
-  const [session, setSession] = useState(() => {
-    try {
-      const saved = sessionStorage.getItem("mast_session");
-      return saved ? JSON.parse(saved) : null;
-    } catch { return null; }
+var BG = "linear-gradient(180deg, #F8FAFF 0%, #F4F7FF 55%, #FFFDF8 100%)";
+var BLUE = "#3B72E8";
+var INK = "#1A2340";
+var SUB = "#6B7895";
+var FONT = '-apple-system, "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif';
+
+export default function App() {
+  var _s = useState(function() {
+    try { var v = sessionStorage.getItem("mast_eta_v4"); return v ? JSON.parse(v) : null; } catch(e) { return null; }
   });
+  var session = _s[0], setSession = _s[1];
 
-  const handleLogin = (s) => {
-    sessionStorage.setItem("mast_session", JSON.stringify(s));
-    setSession(s);
-  };
+  function login(s) { sessionStorage.setItem("mast_eta_v4", JSON.stringify(s)); setSession(s); }
+  function logout() { sessionStorage.removeItem("mast_eta_v4"); setSession(null); }
 
-  const handleLogout = () => {
-    sessionStorage.removeItem("mast_session");
-    setSession(null);
-  };
-  return (
-    <div style={{ minHeight: "100vh", background: PAGE_BG, fontFamily: FONT, color: C.ink }}>
-      <Blobs />
-      <div style={{ position: "relative", maxWidth: 880, margin: "0 auto", padding: "0 20px 64px" }}>
-        {!session ? <Login onLogin={handleLogin} /> : (
-          <>
-            <TopBar session={session} onLogout={handleLogout} />
-            {session.role === "admin" ? <AdminPage session={session} /> : <MemberPage session={session} />}
-          </>
-        )}
-      </div>
-    </div>
-);
+  if (!session) return <LoginPage onLogin={login} />;
+  if (session.role === "admin") return <AdminApp session={session} onLogout={logout} />;
+  return <MemberApp session={session} onLogout={logout} />;
 }
 
-function Blobs() {
-  const blob = (s) => ({ position: "fixed", borderRadius: "50%", filter: "blur(3px)", pointerEvents: "none", zIndex: 0, ...s });
-  return (
-    <>
-      <div style={blob({ width: 190, height: 190, right: -50, top: 40, background: "radial-gradient(circle at 35% 30%,#d2e1f6,#a7c2ea 60%,#dde4cc 100%)", opacity: 0.6 })} />
-      <div style={blob({ width: 120, height: 120, left: -40, bottom: 120, background: "radial-gradient(circle at 40% 35%,#eaf0db,#c4d5ee 70%)", opacity: 0.55 })} />
-      <div style={blob({ width: 60, height: 60, right: 120, bottom: 80, background: "radial-gradient(circle at 40% 35%,#fcf6df,#cfe0f7 75%)", opacity: 0.6, filter: "blur(1px)" })} />
-    </>
-  );
-}
+/* ════════════════════════════════════════════════
+   LOGIN (레퍼런스 시안 그대로)
+═══════════════════════════════════════════════════ */
+function LoginPage(props) {
+  var _n = useState(""), name = _n[0], setName = _n[1];
+  var _g = useState(""), gi = _g[0], setGi = _g[1];
+  var _sc = useState(""), school = _sc[0], setSchool = _sc[1];
+  var _c = useState(""), code = _c[0], setCode = _c[1];
+  var _sh = useState(false), showCode = _sh[0], setShowCode = _sh[1];
+  var _e = useState(""), err = _e[0], setErr = _e[1];
+  var _l = useState(false), loading = _l[0], setLoading = _l[1];
 
-function Login({ onLogin }) {
-  const [name, setName] = useState("");
-  const [gi, setGi] = useState("");
-  const [school, setSchool] = useState("");
-  const [code, setCode] = useState("");
-  const [showCode, setShowCode] = useState(false);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  // 화면 너비 감지 (반응형)
+  var _w = useState(typeof window !== "undefined" ? window.innerWidth : 1024);
+  var winW = _w[0], setWinW = _w[1];
+  useEffect(function() {
+    function onResize() { setWinW(window.innerWidth); }
+    window.addEventListener("resize", onResize);
+    return function() { window.removeEventListener("resize", onResize); };
+  }, []);
+  var isDesktop = winW >= 768;
 
-  const submit = async () => {
+  async function submit() {
     setErr(""); setLoading(true);
     try {
-      const n = name.trim(), g = gi.trim(), s = school.trim();
-      const { data, error } = await supabase.from("members").select("name, gi, school").eq("name", n);
-      if (error) throw error;
-      const norm = (x) => x.replace(/\s/g, "");
-      const m = (data || []).find((row) => norm(row.gi) === norm(g) && norm(row.school) === norm(s));
-      if (!m) { setErr("명단에서 찾을 수 없습니다. 이름·기수·학교를 정확히 입력해 주세요."); return; }
-      const role = code.trim() === ADMIN_CODE ? "admin" : "member";
-      if (code.trim() && role !== "admin") { setErr("관리자 코드가 올바르지 않습니다. (비우면 부원으로 로그인)"); return; }
-      onLogin({ member: m, role });
-    } catch (e) { setErr("로그인 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."); console.error(e); }
+      var hasCode = code.trim().length > 0;
+      var hasFields = name.trim() && gi.trim() && school.trim();
+
+      if (hasCode && !hasFields) {
+        if (code.trim() === ADMIN_CODE) {
+          props.onLogin({ member: { name: "관리자", gi: "-", school: "-" }, role: "admin" });
+          return;
+        }
+        setErr("관리자 코드가 올바르지 않습니다."); return;
+      }
+      if (!hasFields) { setErr("이름·기수·학교를 입력하거나, 관리자 코드만 입력해 주세요."); return; }
+
+      var res = await supabase.from("members").select("name, gi, school").eq("name", name.trim());
+      if (res.error) throw res.error;
+      var m = (res.data || []).find(function(row) {
+        return normalize(row.gi) === normalize(gi) && schoolMatch(school, row.school);
+      });
+      if (!m) { setErr("명단에서 찾을 수 없습니다. 이름·기수·학교를 다시 확인해 주세요."); return; }
+
+      var role = hasCode && code.trim() === ADMIN_CODE ? "admin" : "member";
+      if (hasCode && role !== "admin") { setErr("관리자 코드가 올바르지 않습니다."); return; }
+
+      props.onLogin({ member: m, role: role });
+    } catch(e) { setErr("오류가 발생했습니다. 잠시 후 다시 시도해 주세요."); console.error(e); }
     finally { setLoading(false); }
-  };
+  }
 
-  return (
-    <div style={{ maxWidth: 400, margin: "8vh auto 0", position: "relative", zIndex: 1 }}>
-      <div style={{ textAlign: "center", marginBottom: 26 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: C.sub2 }}>MAST 홍보운영팀</div>
-        <h1 style={{ fontSize: 28, fontWeight: 800, color: C.ink, margin: "5px 0 0", letterSpacing: -0.5 }}>에타 홍보 게시글 관리</h1>
-        <p style={{ fontSize: 13, fontWeight: 500, color: C.sub, marginTop: 8 }}>이름 · 기수 · 학교를 입력해 로그인하세요</p>
+  // 공통 콘텐츠 (카드 안/풀스크린 안에 똑같이 들어감)
+  var content = (
+    <>
+      <img src={mastLogo} alt="MAST" style={{ height: 48, marginBottom: 10 }} />
+      <div style={{ fontSize: 13, color: "#8093B8", marginBottom: 2, fontWeight: 500 }}>University Student</div>
+      <div style={{ fontSize: 13, color: "#8093B8", marginBottom: 14, fontWeight: 500 }}>Academic Alliance</div>
+      <div style={{ fontSize: 17, fontWeight: 800, color: INK, marginBottom: 6, letterSpacing: -0.5 }}>홍보 활동 인증 시스템</div>
+
+      <div style={{ marginTop: 0, marginBottom: 4, display: "flex", justifyContent: "center", position: "relative" }}>
+        <img src={megaphoneImg} alt="" style={{ width: "100%", maxWidth: isDesktop ? 380 : 340, height: "auto", filter: "drop-shadow(0 20px 28px rgba(60,100,200,0.22))", animation: "floaty 4s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", bottom: -4, left: "50%", transform: "translateX(-50%)", width: "50%", height: 14, background: "radial-gradient(ellipse, rgba(60,100,200,0.22) 0%, transparent 70%)", filter: "blur(5px)" }} />
       </div>
-      <div style={glassCard()}>
-        <Field label="이름"><input style={input()} value={name} placeholder="예: 김민서" onChange={(e) => setName(e.target.value)} /></Field>
-        <Field label="기수"><input style={input()} value={gi} placeholder="예: 2기" onChange={(e) => setGi(e.target.value)} /></Field>
-        <Field label="학교"><input style={input()} value={school} placeholder="예: 가천대학교" onChange={(e) => setSchool(e.target.value)} /></Field>
-        <Field label="관리자 코드 (선택)">
-          <div style={{ position: "relative" }}>
-            <input style={{ ...input(), paddingRight: 44 }} type={showCode ? "text" : "password"} value={code} placeholder="운영진만 입력 · 비우면 부원으로"
-              onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
-            <button type="button" onClick={() => setShowCode(v => !v)}
-              style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.hint, fontSize: 16, padding: 0, lineHeight: 1 }}>
-              {showCode ? "🙈" : "👁️"}
+      <style>{"@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}"}</style>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+        <IconInput icon={<IconUser />} value={name} onChange={setName} placeholder="이름을 입력하세요" />
+        <IconInput icon={<IconCap />} value={gi} onChange={setGi} placeholder="기수를 입력하세요 (예: 26기)" />
+        <IconInput icon={<IconSchool />} value={school} onChange={setSchool} placeholder="학교를 입력하세요 (예: 홍익대학교)" />
+        <IconInput
+          icon={<IconLock />} value={code} onChange={setCode} type={showCode ? "text" : "password"}
+          placeholder="관리자 코드를 입력하세요 (선택사항)"
+          right={
+            <button type="button" onClick={function() { setShowCode(function(v) { return !v; }); }}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: SUB, display: "flex", alignItems: "center" }}>
+              {showCode ? <IconEyeOff /> : <IconEye />}
             </button>
-          </div>
-        </Field>
-        {err && <div style={{ background: C.missSoft, color: C.miss, fontSize: 13, fontWeight: 600, padding: "10px 12px", borderRadius: 10, marginBottom: 6 }}>{err}</div>}
-        <button style={primaryBtn({ width: "100%", marginTop: 6, opacity: loading ? 0.6 : 1 })} disabled={loading} onClick={submit}>
-          {loading ? "확인 중..." : "로그인"}
-        </button>
+          }
+          onEnter={submit}
+        />
       </div>
-      <p style={{ fontSize: 11, fontWeight: 500, color: C.hint, textAlign: "center", marginTop: 14 }}>MAST 홍보운영팀 · 에타 홍보 인증 시스템</p>
-    </div>
-  );
-}
 
-function TopBar({ session, onLogout }) {
-  const isAdmin = session.role === "admin";
-  return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "26px 0 22px" }}>
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: C.sub2 }}>MAST 홍보운영팀</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: C.ink, letterSpacing: -0.5, lineHeight: 1.18 }}>에타 홍보 {isAdmin ? "관리" : "게시글 관리"}</div>
+      {err && <div style={{ background: "#FDECEC", color: "#C0392B", fontSize: 13, fontWeight: 600, padding: "11px 14px", borderRadius: 12, marginBottom: 12 }}>{err}</div>}
+
+      <button style={btnPrimary({ opacity: loading ? 0.7 : 1, borderRadius: 16, padding: "16px 0" })} disabled={loading} onClick={submit}>
+        {loading ? "확인 중..." : "로그인"}
+      </button>
+      <div style={{ fontSize: 12, color: "#8A96AB", marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+        관리자 코드는 관리자에게 문의하세요. <IconHelp />
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.white70, backdropFilter: "blur(10px)", border: "0.5px solid rgba(255,255,255,0.9)", padding: "7px 13px", borderRadius: 999 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{session.member.name}</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: isAdmin ? "#fff" : C.blueDeep, background: isAdmin ? C.blue : C.blueSoft2, padding: "2px 8px", borderRadius: 999 }}>{isAdmin ? "관리자" : "부원"}</span>
+      <div style={{ fontSize: 11, color: "#A8B2C5", marginTop: 8, lineHeight: 1.5 }}>
+        ※ 세부 캠퍼스(예: 세종캠퍼스)는 학교명만 입력해도 됩니다.
+      </div>
+    </>
+  );
+
+  // 데스크탑: 화면 중앙 카드 + 카드 밖에 큰 배경 구슬
+  if (isDesktop) {
+    return (
+      <div style={{ minHeight: "100vh", background: "linear-gradient(180deg, #EEF4FC 0%, #DCE6F5 60%, #CDDCF2 100%)", fontFamily: FONT, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
+        {/* 카드 밖 큰 배경 구슬들 */}
+        {/* 좌측 */}
+        <Orb style={{ width: 220, height: 220, left: "6%", top: "8%" }} />
+        <SaturnOrb style={{ width: 240, left: "3%", top: "38%" }} />
+        <Orb style={{ width: 280, height: 280, left: "2%", bottom: "-4%" }} />
+        <Orb style={{ width: 60, height: 60, left: "26%", top: "20%" }} />
+        {/* 우측 */}
+        <Orb style={{ width: 180, height: 180, right: "8%", top: "10%" }} />
+        <Orb style={{ width: 80, height: 80, right: "20%", top: "42%" }} />
+        <Orb style={{ width: 55, height: 55, right: "5%", top: "55%" }} />
+        <YellowOrb style={{ width: 140, right: "8%", bottom: "8%" }} />
+        <Orb style={{ width: 90, height: 90, right: "26%", bottom: "12%" }} />
+        {/* 상단 작은 점 */}
+        <Orb style={{ width: 40, height: 40, left: "50%", top: "8%" }} />
+
+        {/* 중앙 카드 */}
+        <div style={{ position: "relative", width: "100%", maxWidth: 460, background: "rgba(255,255,255,0.78)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderRadius: 32, boxShadow: "0 24px 70px rgba(60,100,200,0.18)", padding: "44px 52px", zIndex: 2, textAlign: "center", border: "1px solid rgba(255,255,255,0.6)" }}>
+          {content}
         </div>
-        <button style={ghostBtn()} onClick={onLogout}>로그아웃</button>
+      </div>
+    );
+  }
+
+  // 모바일: 풀스크린
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(180deg, #EEF4FC 0%, #DCE6F5 60%, #CDDCF2 100%)", fontFamily: FONT, display: "flex", flexDirection: "column", alignItems: "center", padding: "0 24px", position: "relative", overflow: "hidden" }}>
+      {/* 모바일 배경 구슬 (시안 위치) */}
+      <Orb style={{ width: 80, height: 80, right: 30, top: 90 }} />
+      <Orb style={{ width: 25, height: 25, left: 50, top: 240 }} />
+      <SaturnOrb style={{ width: 150, left: -50, top: 400 }} />
+      <Orb style={{ width: 45, height: 45, right: 40, top: 460 }} />
+      <Orb style={{ width: 20, height: 20, right: 90, top: 560 }} />
+      <Orb style={{ width: 16, height: 16, right: 60, top: 690 }} />
+      <Orb style={{ width: 65, height: 65, left: 15, bottom: 50 }} />
+      <YellowOrb style={{ width: 80, right: 25, bottom: 25 }} />
+
+      <div style={{ position: "relative", width: "100%", maxWidth: 360, textAlign: "center", paddingTop: 50, paddingBottom: 30, zIndex: 2 }}>
+        {content}
       </div>
     </div>
   );
 }
 
-function MemberPage({ session }) {
-  const today = todayStr();
-  const myKey = keyOf(session.member);
-  const [mission, setMission] = useState(null);
-  const [proofsByKey, setProofsByKey] = useState({});
-  const [assigneeMembers, setAssigneeMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
+/* ════════════════════════════════════════════════
+   MEMBER APP
+═══════════════════════════════════════════════════ */
+function MemberApp(props) {
+  var _tab = useState("home"), tab = _tab[0], setTab = _tab[1];
+  var tabs = [
+    { key: "home", label: "홈", icon: <NavHome /> },
+    { key: "cert", label: "인증", icon: <NavCheck /> },
+    { key: "record", label: "내 기록", icon: <NavList /> },
+    { key: "profile", label: "내 정보", icon: <NavUser /> },
+  ];
+  return (
+    <div style={{ minHeight: "100vh", background: BG, fontFamily: FONT, paddingBottom: 80 }}>
+      <div style={{ maxWidth: 480, margin: "0 auto", position: "relative" }}>
+        {tab === "home" && <MemberHome session={props.session} onTab={setTab} />}
+        {tab === "cert" && <MemberCert session={props.session} onTab={setTab} />}
+        {tab === "record" && <MemberRecord session={props.session} />}
+        {tab === "profile" && <MemberProfile session={props.session} onLogout={props.onLogout} />}
+      </div>
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #E5EAF2", display: "flex", zIndex: 30, maxWidth: 480, margin: "0 auto" }}>
+        {tabs.map(function(t) {
+          var active = tab === t.key;
+          return (
+            <button key={t.key} onClick={function() { setTab(t.key); }}
+              style={{ flex: 1, border: "none", background: "none", cursor: "pointer", fontFamily: FONT, padding: "12px 0 14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: active ? BLUE : "#9AA3B2", position: "relative" }}>
+              {t.icon}
+              <span style={{ fontSize: 11, fontWeight: active ? 700 : 500 }}>{t.label}</span>
+              {active && <div style={{ position: "absolute", bottom: 8, width: 4, height: 4, borderRadius: "50%", background: BLUE }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-  const load = useCallback(async () => {
+function MemberHome(props) {
+  var session = props.session;
+  var myKey = keyOf(session.member);
+  var today = todayKST();
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _myProof = useState(null), myProof = _myProof[0], setMyProof = _myProof[1];
+  var _records = useState([]), records = _records[0], setRecords = _records[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+
+  var load = useCallback(async function() {
     setLoading(true);
-    const { data: mData } = await supabase.from("missions").select("*").eq("date", today).maybeSingle();
-    setMission(mData || null);
-    const { data: pData } = await supabase.from("proofs").select("*").eq("date", today);
-    const byKey = {}; (pData || []).forEach((p) => { byKey[p.member_key] = p; });
-    setProofsByKey(byKey);
-    if (mData?.assignees?.length) {
-      const { data: mem } = await supabase.from("members").select("*");
-      const set = new Set(mData.assignees);
-      setAssigneeMembers((mem || []).filter((m) => set.has(keyOf(m))));
-    } else { setAssigneeMembers([]); }
+    var r1 = await supabase.from("missions").select("*").eq("mission_date", today).maybeSingle();
+    setMission(r1.data || null);
+    var r2 = await supabase.from("proofs").select("*").eq("member_key", myKey).eq("mission_date", today).maybeSingle();
+    setMyProof(r2.data || null);
+    var r3 = await supabase.from("proofs").select("*").eq("member_key", myKey).order("submitted_at", { ascending: false }).limit(5);
+    setRecords(r3.data || []);
     setLoading(false);
-  }, [today]);
+  }, [myKey, today]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(function() { load(); }, [load]);
 
-  const isAssignee = !!mission && mission.assignees?.includes(myKey);
-  const myProof = proofsByKey[myKey];
-  if (loading) return <Loading />;
+  var isAssignee = mission && mission.assignees && mission.assignees.indexOf(myKey) !== -1;
+  var myStatus = myProof ? myProof.status : (isAssignee ? "none" : null);
 
   return (
-    <div style={{ position: "relative", zIndex: 1 }}>
-      {!mission ? (
-        <div style={{ ...glassCard(), textAlign: "center" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>오늘 등록된 홍보 미션이 없습니다</div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: C.sub, marginTop: 6 }}>관리자가 미션을 등록하면 이곳에 표시됩니다.</div>
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "22px 0 6px" }}>
+        <img src={mastLogo} alt="MAST" style={{ height: 26 }} />
+        <IconBell color={SUB} />
+      </div>
+      <div style={{ fontSize: 14, color: "#4A5568", marginBottom: 4 }}>안녕하세요,</div>
+      <div style={{ fontSize: 22, fontWeight: 900, color: INK, marginBottom: 18, display: "flex", alignItems: "center", gap: 6 }}>
+        {session.member.name}님 <IconHand />
+      </div>
+
+      {loading ? (
+        <div style={card({ marginBottom: 16, textAlign: "center", color: SUB })}>불러오는 중...</div>
+      ) : !mission ? (
+        <div style={card({ marginBottom: 16, textAlign: "center", padding: 32 })}>
+          <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}><IconInbox /></div>
+          <div style={{ fontSize: 14, color: SUB, fontWeight: 600 }}>오늘 등록된 홍보 미션이 없습니다.</div>
         </div>
       ) : (
-        <div style={glassCard()}>
-          <span style={pill(C.blueDeep, C.blueSoft)}>오늘의 홍보 미션</span>
-          <div style={{ fontSize: 21, fontWeight: 800, marginTop: 13, color: C.ink, letterSpacing: -0.3 }}>{mission.title}</div>
-          {mission.body && <p style={{ fontSize: 13, fontWeight: 500, color: C.sub, margin: "7px 0 0", lineHeight: 1.6 }}>{mission.body}</p>}
-          {mission.deadline && <span style={{ display: "inline-block", marginTop: 13, fontSize: 11, fontWeight: 700, color: C.warn, background: C.warnSoft, padding: "5px 11px", borderRadius: 8 }}>마감 {mission.deadline}</span>}
-          <div style={{ marginTop: 20, padding: 17, borderRadius: 16, background: "linear-gradient(120deg,#eef3fb,#e7edf6)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.sub2, marginBottom: 12 }}>오늘 담당자 · 전 부원 공개</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 9 }}>
-              {assigneeMembers.length === 0 ? (
-                <span style={{ fontSize: 13, fontWeight: 600, color: C.sub }}>지정된 담당자가 없습니다.</span>
-              ) : assigneeMembers.map((m) => {
-                const mine = keyOf(m) === myKey;
-                const approved = proofsByKey[keyOf(m)]?.status === ST.APPROVED;
+        <div style={card({ background: "linear-gradient(135deg,#3B72E8 0%,#5A8EF5 100%)", color: "#fff", marginBottom: 16, padding: 22, position: "relative", overflow: "visible" })}>
+          <img src={megaphoneImg} alt="" style={{ position: "absolute", right: -16, top: -30, width: 130, height: "auto", filter: "drop-shadow(0 10px 18px rgba(0,0,0,0.15))" }} />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.85, marginBottom: 8 }}>오늘 홍보 대상자</div>
+            {isAssignee ? (
+              <>
+                <div style={{ fontSize: 22, fontWeight: 900, marginBottom: 4 }}>당신은</div>
+                <div style={{ fontSize: 22, fontWeight: 900, marginBottom: 12 }}>오늘 대상입니다!</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 12 }}>{mission.title}</div>
+            )}
+            <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 14, display: "flex", alignItems: "center", gap: 4 }}>
+              <IconClock color="#fff" />마감 {mission.deadline}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {(mission.assignees || []).slice(0, 5).map(function(k) {
+                var parts = k.split("|");
+                var mine = k === myKey;
                 return (
-                  <span key={keyOf(m)} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 16, fontWeight: 800, color: mine ? C.blueDeep : C.ink2, background: "#fff", border: mine ? "1.5px solid #9dbdec" : "1.5px solid transparent", padding: "10px 16px", borderRadius: 14 }}>
-                    {m.name}
-                    <span style={{ fontWeight: 600, color: C.hint, fontSize: 12 }}>{shortSchool(m.school)}</span>
-                    {approved && <span style={{ color: C.done }}>✓</span>}
-                    {mine && <span style={{ fontSize: 11, fontWeight: 700, color: C.blueDeep }}>· 나</span>}
-                  </span>
+                  <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: "50%", background: mine ? "#fff" : "rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", color: mine ? BLUE : "#fff", fontWeight: 800, fontSize: 14, border: mine ? "2px solid #fff" : "none" }}>
+                      {parts[0].slice(0, 1)}
+                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{parts[0]}{mine ? " (나)" : ""}</div>
+                  </div>
                 );
               })}
             </div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 10 }}>총 {(mission.assignees || []).length}명</div>
           </div>
         </div>
       )}
 
-      <div style={{ fontSize: 16, fontWeight: 800, margin: "26px 0 12px", color: C.ink }}>내 인증</div>
-      {!mission ? (
-        <div style={{ ...glassCard(0.6), textAlign: "center", fontSize: 14, fontWeight: 600, color: C.sub }}>오늘 미션이 없습니다.</div>
-      ) : !isAssignee ? (
-        <div style={{ ...glassCard(0.6), textAlign: "center", padding: 26 }}>
-          <div style={{ fontSize: 28, marginBottom: 6 }}>🔒</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#3a4356" }}>오늘 담당자가 아닙니다</div>
-          <p style={{ fontSize: 13, fontWeight: 500, color: "#7886a0", margin: "8px 0 0", lineHeight: 1.6 }}>인증 업로드 권한은 그날 지정된 담당자에게만 있어요.<br />위에서 오늘 담당자를 확인할 수 있습니다.</p>
+      {mission && isAssignee && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+          <div style={card({ flex: 1, padding: 16 })}>
+            <div style={{ fontSize: 11, color: SUB, marginBottom: 6, fontWeight: 600 }}>현재 상태</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: stColor(myStatus), display: "inline-block" }} />
+              <span style={{ fontSize: 14, fontWeight: 800, color: stColor(myStatus) }}>{stLabel(myStatus)}</span>
+            </div>
+            <div style={{ fontSize: 11, color: SUB, marginTop: 4 }}>마감 {mission.deadline}까지</div>
+          </div>
+          <button onClick={function() { props.onTab("cert"); }}
+            style={{ flex: 1, border: "none", borderRadius: 18, background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", color: "#fff", cursor: "pointer", fontFamily: FONT, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: "14px" }}>
+            <CameraIcon size={32} />
+            <span style={{ fontSize: 14, fontWeight: 800 }}>{myProof ? "사진 수정" : "인증하기"}</span>
+          </button>
         </div>
-      ) : myProof && myProof.status !== ST.REJECTED ? (
-        <MyProofCard proof={myProof} />
-      ) : (
-        <UploadForm myKey={myKey} today={today} rejected={myProof?.status === ST.REJECTED} existingId={myProof?.id} onDone={load} />
       )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: INK }}>나의 최근 기록</div>
+        <button onClick={function() { props.onTab("record"); }} style={{ border: "none", background: "none", color: BLUE, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT }}>전체 보기 ›</button>
+      </div>
+      <div style={card({ padding: 0, overflow: "hidden" })}>
+        {records.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", fontSize: 13, color: SUB }}>기록이 없습니다.</div>
+        ) : records.map(function(r, i) {
+          return (
+            <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px", borderTop: i ? "1px solid #F1F4F9" : "none" }}>
+              <div style={{ fontSize: 13, color: "#4A5568", fontWeight: 600 }}>{fmtDate(r.mission_date)}</div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: stColor(r.status), background: stBg(r.status), padding: "4px 12px", borderRadius: 999 }}>{stLabel(r.status)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-async function runChecks(file, today) {
-  const result = { format: false, duplicate: false, dateToday: null, hash: "" };
-  result.format = /^image\//.test(file.type);
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let h = 0;
-  for (let i = 0; i < bytes.length; i += Math.max(1, Math.floor(bytes.length / 4096))) h = (h * 31 + bytes[i]) >>> 0;
-  result.hash = `${file.size}-${h}`;
-  const { data } = await supabase.from("proofs").select("check_result");
-  result.duplicate = (data || []).some((row) => row.check_result?.hash === result.hash);
-  try { result.dateToday = extractExifDateMatchesToday(bytes, today); } catch { result.dateToday = null; }
-  return result;
-}
+function MemberCert(props) {
+  var session = props.session;
+  var myKey = keyOf(session.member);
+  var today = todayKST();
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _myProof = useState(null), myProof = _myProof[0], setMyProof = _myProof[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+  var _done = useState(false), done = _done[0], setDone = _done[1];
 
-function extractExifDateMatchesToday(bytes, today) {
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
-  const text = new TextDecoder("latin1").decode(bytes.subarray(0, Math.min(bytes.length, 200000)));
-  const m = text.match(/(\d{4}):(\d{2}):(\d{2}) \d{2}:\d{2}:\d{2}/);
-  if (!m) return null;
-  return `${m[1]}-${m[2]}-${m[3]}` === today;
-}
+  var load = useCallback(async function() {
+    setLoading(true);
+    var r1 = await supabase.from("missions").select("*").eq("mission_date", today).maybeSingle();
+    setMission(r1.data || null);
+    var r2 = await supabase.from("proofs").select("*").eq("member_key", myKey).eq("mission_date", today).maybeSingle();
+    setMyProof(r2.data || null);
+    setLoading(false);
+  }, [myKey, today]);
 
-function checkSummary(check) {
-  if (!check) return { tone: "warn", label: "검증 정보 없음" };
-  if (!check.format) return { tone: "miss", label: "이미지 형식 아님" };
-  if (check.duplicate) return { tone: "miss", label: "중복 캡처" };
-  if (check.dateToday === false) return { tone: "warn", label: "촬영일 오늘 아님" };
-  if (check.dateToday === null) return { tone: "warn", label: "촬영일 확인불가" };
-  return { tone: "done", label: "검증 통과" };
-}
+  useEffect(function() { load(); }, [load]);
 
-function UploadForm({ myKey, today, rejected, existingId, onDone }) {
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
-  const [check, setCheck] = useState(null);
-  const [link, setLink] = useState("");
-  const [memo, setMemo] = useState("");
-  const [busy, setBusy] = useState(false);
-  const fileRef = useRef(null);
+  var isAssignee = mission && mission.assignees && mission.assignees.indexOf(myKey) !== -1;
 
-  const pick = async (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setFile(f);
-    setCheck(await runChecks(f, today));
-    const reader = new FileReader();
-    reader.onload = () => setPreview(reader.result);
-    reader.readAsDataURL(f);
-  };
+  if (loading) return <CenteredMsg msg="불러오는 중..." />;
 
-  const blocked = check && (!check.format || check.duplicate);
-  const summary = check ? checkSummary(check) : null;
+  if (done) return (
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="인증 완료" />
+      <div style={{ padding: "20px 0", textAlign: "center", position: "relative" }}>
+        {/* 장식 파티클 */}
+        <div style={{ position: "absolute", left: "15%", top: 40, width: 8, height: 8, background: "#FBBF24", borderRadius: 2, transform: "rotate(45deg)" }} />
+        <div style={{ position: "absolute", right: "20%", top: 20, width: 7, height: 7, background: "#3B72E8", borderRadius: 2, transform: "rotate(45deg)" }} />
+        <div style={{ position: "absolute", left: "10%", top: 180, width: 6, height: 6, background: "#E04848", borderRadius: 2, transform: "rotate(45deg)" }} />
+        <div style={{ position: "absolute", right: "12%", top: 160, width: 8, height: 8, background: "#10A26A", borderRadius: 2, transform: "rotate(45deg)" }} />
+        <div style={{ position: "absolute", right: "30%", top: 220, width: 5, height: 5, background: "#FBBF24", borderRadius: 2, transform: "rotate(45deg)" }} />
 
-  const submit = async () => {
-    if (!file || blocked) return;
-    setBusy(true);
-    try {
-      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const safeKey = encodeURIComponent(myKey).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-      const randomId = Math.random().toString(36).slice(2, 8);
-      const path = `${today}/${safeKey}_${Date.now()}_${randomId}.${ext}ㄹ
-      if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from(PROOF_BUCKET).getPublicUrl(path);
-      const row = {
-        date: today, member_key: myKey, image_url: pub.publicUrl,
-        link: link || null, memo: memo || null, check_result: check,
-        status: ST.PENDING, submitted_at: new Date().toISOString(),
-      };
-      if (existingId) {
-        const { error } = await supabase.from("proofs").update(row).eq("id", existingId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("proofs").upsert(row, { onConflict: "date,member_key" });
-        if (error) throw error;
-      }
-      await onDone();
-    } catch (e) { alert("업로드 중 오류가 발생했습니다. 다시 시도해 주세요."); console.error(e); }
-    finally { setBusy(false); }
-  };
+        <div style={{ marginBottom: 28, display: "flex", justifyContent: "center" }}>
+          <img src={successCheckImg} alt="인증 완료" style={{ width: 240, height: "auto", filter: "drop-shadow(0 16px 28px rgba(16,162,106,0.25))" }} />
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: INK, marginBottom: 6 }}>인증이 제출되었습니다!</div>
+        <div style={{ fontSize: 14, color: SUB, marginBottom: 28 }}>관리자 승인 후 인증 완료로 표시됩니다.</div>
+        <button style={btnPrimary()} onClick={function() { setDone(false); props.onTab("home"); }}>홈으로 돌아가기</button>
+      </div>
+    </div>
+  );
+
+  if (!mission) return (
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="인증하기" />
+      <CenteredMsg msg="오늘 등록된 홍보 미션이 없습니다." />
+    </div>
+  );
+
+  if (!isAssignee) return (
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="인증하기" />
+      <div style={{ padding: "60px 24px", textAlign: "center" }}>
+        <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}><IconLockBig /></div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: INK, marginBottom: 8 }}>오늘 담당자가 아닙니다</div>
+        <div style={{ fontSize: 14, color: SUB }}>인증은 오늘 지정된 담당자만 가능합니다.</div>
+      </div>
+    </div>
+  );
 
   return (
-    <div style={glassCard()}>
-      {rejected && <div style={{ background: C.missSoft, color: C.miss, fontSize: 13, fontWeight: 700, padding: "10px 12px", borderRadius: 10, marginBottom: 14 }}>이전 인증이 반려되었습니다. 다시 업로드해 주세요.</div>}
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sub2, marginBottom: 6 }}>에타 게시글 캡처 (필수)</div>
-      {!preview ? (
-        <div onClick={() => fileRef.current?.click()} style={{ border: "1.5px dashed #aebfd9", borderRadius: 14, padding: 24, textAlign: "center", color: "#7886a0", fontWeight: 600, fontSize: 13, background: "#f8faff", cursor: "pointer" }}>캡처 이미지를 올려주세요</div>
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="인증하기" />
+
+      <div style={card({ marginBottom: 16 })}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: BLUE, marginBottom: 6 }}>오늘 홍보 미션</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: INK, marginBottom: 8 }}>{mission.title}</div>
+        {mission.body && (
+          <div style={{ fontSize: 13, color: "#4A5568", lineHeight: 1.7, marginBottom: 10, whiteSpace: "pre-wrap" }}>
+            {mission.body}
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: "#E05A00", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+          <IconClock color="#E05A00" />마감 {mission.deadline}
+        </div>
+
+        {mission.mission_image_url && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #F1F4F9" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: SUB, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
+              <IconAttach color={SUB} />첨부 이미지 (다운로드해서 에타에 업로드)
+            </div>
+            <img src={mission.mission_image_url} alt="미션 첨부" style={{ width: "100%", borderRadius: 12, border: "1px solid #E5EAF2" }} />
+            <a href={mission.mission_image_url} download target="_blank" rel="noreferrer"
+               style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 10, padding: "10px 0", background: "#F0F4FB", color: BLUE, fontWeight: 700, fontSize: 13, borderRadius: 10, textDecoration: "none" }}>
+              <IconDownload />이미지 다운로드
+            </a>
+          </div>
+        )}
+      </div>
+
+      {myProof && myProof.status === ST.APPROVED ? (
+        <div style={card({ background: "#E6F8EF", border: "1px solid #B8E6CD" })}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <IconCheck color="#10A26A" />
+            <span style={{ fontSize: 15, fontWeight: 800, color: "#10A26A" }}>인증 완료</span>
+            <span style={{ fontSize: 12, color: SUB, marginLeft: "auto" }}>{fmtTime(myProof.submitted_at)}</span>
+          </div>
+          <div style={{ fontSize: 13, color: "#4A5568" }}>승인되었습니다. 수고하셨습니다.</div>
+        </div>
       ) : (
-        <img src={preview} alt="캡처 미리보기" style={{ width: "100%", maxHeight: 300, objectFit: "contain", borderRadius: 14, border: `1px solid ${C.line}` }} />
+        <UploadForm myKey={myKey} memberName={session.member.name} today={today} missionId={mission.id}
+          existingProof={myProof} onDone={function() { setDone(true); }} />
       )}
-      <input ref={fileRef} type="file" accept="image/*" onChange={pick} style={{ display: "none" }} />
-      {summary && (
-        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={pill(toneInk(summary.tone), toneBg(summary.tone), 11)}>{summary.label}</span>
-          <button style={{ ...ghostBtn(), padding: "6px 12px" }} onClick={() => fileRef.current?.click()}>다시 선택</button>
+
+      <div style={card({ marginTop: 16, background: "rgba(255,255,255,0.7)" })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK, marginBottom: 8 }}>인증 시 유의사항</div>
+        <div style={{ fontSize: 12, color: SUB, lineHeight: 1.7 }}>
+          • 에브리타임 게시글이 보이도록 캡처해주세요.<br />
+          • 조작된 이미지가 확인될 경우 인정되지 않습니다.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadForm(props) {
+  var myKey = props.myKey, memberName = props.memberName, today = props.today, missionId = props.missionId, existingProof = props.existingProof;
+  var _file = useState(null), file = _file[0], setFile = _file[1];
+  var _preview = useState(null), preview = _preview[0], setPreview = _preview[1];
+  var _busy = useState(false), busy = _busy[0], setBusy = _busy[1];
+  var _err = useState(""), err = _err[0], setErr = _err[1];
+  var fileRef = useRef(null);
+
+  function pick(e) {
+    var f = e.target.files ? e.target.files[0] : null;
+    if (!f) return;
+    if (!/^image\//.test(f.type)) { setErr("이미지 파일만 업로드 가능합니다."); return; }
+    setErr(""); setFile(f);
+    var reader = new FileReader();
+    reader.onload = function() { setPreview(reader.result); };
+    reader.readAsDataURL(f);
+  }
+
+  async function submit() {
+    if (!file && !existingProof) { setErr("사진을 선택해 주세요."); return; }
+    setBusy(true); setErr("");
+    try {
+      var row = { mission_id: missionId, mission_date: today, member_key: myKey, member_name: memberName, status: ST.PENDING, submitted_at: new Date().toISOString() };
+
+      if (file) {
+        if (existingProof && existingProof.proof_file_path) {
+          await supabase.storage.from(PROOF_BUCKET).remove([existingProof.proof_file_path]);
+        }
+        var ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!ext) ext = "jpg";
+        var safeKey = encodeURIComponent(myKey).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
+        var path = today + "/" + safeKey + "_" + Date.now() + "." + ext;
+        var upRes = await supabase.storage.from(PROOF_BUCKET).upload(path, file, { upsert: true });
+        if (upRes.error) throw upRes.error;
+        row.proof_image_url = supabase.storage.from(PROOF_BUCKET).getPublicUrl(path).data.publicUrl;
+        row.proof_file_path = path;
+      }
+
+      var dbRes;
+      if (existingProof) {
+        dbRes = await supabase.from("proofs").update(row).eq("id", existingProof.id);
+      } else {
+        dbRes = await supabase.from("proofs").upsert(row, { onConflict: "mission_date,member_key" });
+      }
+      if (dbRes.error) throw dbRes.error;
+      props.onDone();
+    } catch(e) { setErr("업로드 중 오류가 발생했습니다. 다시 시도해 주세요."); console.error(e); }
+    finally { setBusy(false); }
+  }
+
+  var existingImg = existingProof && existingProof.proof_image_url;
+
+  return (
+    <div style={card()}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#4A5568", marginBottom: 10 }}>에타 게시글 캡처 이미지를 업로드해주세요</div>
+      {existingProof && (
+        <div style={{ fontSize: 12, color: existingProof.status === ST.REJECTED ? "#E04848" : "#3B72E8", marginBottom: 10, fontWeight: 600 }}>
+          {existingProof.status === ST.REJECTED ? "사진 반려됨. 다시 올려주세요." : "이미 제출되었습니다. 사진을 변경할 수 있습니다."}
         </div>
       )}
-      <div style={{ marginTop: 16 }}>
-        <Field label="게시글 링크 (선택)"><input style={input()} value={link} placeholder="https://everytime.kr/..." onChange={(e) => setLink(e.target.value)} /></Field>
-        <Field label="메모 (선택)"><input style={input()} value={memo} placeholder="게시판 / 내용 등" onChange={(e) => setMemo(e.target.value)} /></Field>
-      </div>
-      <div style={{ fontSize: 11, fontWeight: 500, color: "#7886a0", lineHeight: 1.6, marginBottom: 12 }}>
-        <span style={{ color: C.blueDeep, fontWeight: 700 }}>자동 검증:</span> 형식·중복·촬영일(오늘) 확인 → 통과 시 <b>검토 대기</b>로 접수, 관리자 승인 후 수행으로 인정됩니다.
-      </div>
-      <button style={primaryBtn({ width: "100%", opacity: preview && !blocked && !busy ? 1 : 0.5 })} disabled={!preview || blocked || busy} onClick={submit}>
-        {busy ? "업로드 중..." : blocked ? "검증 실패 — 다른 캡처를 올려주세요" : "인증 제출 (검토 대기로 접수)"}
+
+      {(preview || existingImg) ? (
+        <div style={{ position: "relative", marginBottom: 12 }}>
+          <img src={preview || existingImg} alt="미리보기" style={{ width: "100%", maxHeight: 300, objectFit: "contain", borderRadius: 14, border: "1px solid #E5EAF2" }} />
+          <button onClick={function() { fileRef.current && fileRef.current.click(); }}
+            style={{ position: "absolute", top: 8, right: 8, border: "none", borderRadius: 8, background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 12, padding: "5px 12px", cursor: "pointer", fontFamily: FONT, fontWeight: 600 }}>변경</button>
+        </div>
+      ) : (
+        <div onClick={function() { fileRef.current && fileRef.current.click(); }}
+          style={{ border: "2px dashed #BCD0F0", borderRadius: 16, padding: "28px 16px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", background: "rgba(248,250,255,0.6)", marginBottom: 12 }}>
+          <img src={cameraImg} alt="" style={{ width: 200, height: "auto", filter: "drop-shadow(0 10px 20px rgba(60,100,200,0.15))" }} />
+          <div style={{ fontSize: 14, color: SUB, marginTop: 12, fontWeight: 600 }}>에타 게시글 캡처 이미지를</div>
+          <div style={{ fontSize: 14, color: SUB, fontWeight: 600 }}>업로드해주세요</div>
+          <div style={{ fontSize: 11, color: "#A8B2C5", marginTop: 6 }}>JPG, PNG (최대 10MB)</div>
+        </div>
+      )}
+      <input ref={fileRef} type="file" accept="image/*" onChange={pick} style={{ display: "none" }} />
+      {err && <div style={{ fontSize: 13, color: "#C0392B", marginBottom: 10, fontWeight: 600 }}>{err}</div>}
+      <button style={btnPrimary({ opacity: busy ? 0.7 : 1 })} disabled={busy} onClick={submit}>
+        {busy ? "업로드 중..." : existingProof ? "사진 수정 완료" : "인증 제출"}
       </button>
     </div>
   );
 }
 
-function MyProofCard({ proof }) {
-  const pending = proof.status === ST.PENDING;
-  const summary = checkSummary(proof.check_result);
-  return (
-    <div style={{ ...glassCard(), borderColor: pending ? C.warnSoft : C.doneSoft }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <span style={pill(pending ? C.warn : C.done, pending ? C.warnSoft : C.doneSoft)}>{pending ? "검토 대기" : "수행 인정 완료"}</span>
-        <span style={pill(toneInk(summary.tone), toneBg(summary.tone), 11)}>{summary.label}</span>
-        <span style={{ fontSize: 12, fontWeight: 500, color: C.hint, marginLeft: "auto" }}>{fmt(proof.submitted_at)}</span>
-      </div>
-      {proof.image_url && <img src={proof.image_url} alt="인증 캡처" style={{ width: "100%", maxHeight: 300, objectFit: "contain", borderRadius: 14, border: `1px solid ${C.line}` }} />}
-      {proof.link && <div style={{ fontSize: 13, fontWeight: 500, marginTop: 8 }}>링크: <a href={proof.link} target="_blank" rel="noreferrer" style={{ color: C.blue }}>{proof.link}</a></div>}
-      {proof.memo && <div style={{ fontSize: 13, fontWeight: 500, color: C.sub, marginTop: 4 }}>메모: {proof.memo}</div>}
-      {pending && <p style={{ fontSize: 12, fontWeight: 500, color: C.sub, marginTop: 10 }}>관리자 승인 후 최종 수행으로 인정됩니다.</p>}
-    </div>
-  );
-}
+function MemberRecord(props) {
+  var myKey = keyOf(props.session.member);
+  var _records = useState([]), records = _records[0], setRecords = _records[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
 
-function AdminPage({ session }) {
-  const today = todayStr();
-  const [tab, setTab] = useState("status");
-  const [mission, setMission] = useState(null);
-  const [loading, setLoading] = useState(true);
+  useEffect(function() {
+    (async function() {
+      var r = await supabase.from("proofs").select("*").eq("member_key", myKey).order("submitted_at", { ascending: false });
+      setRecords(r.data || []);
+      setLoading(false);
+    })();
+  }, [myKey]);
 
-  const loadMission = useCallback(async () => {
-    setLoading(true);
-    const { data } = await supabase.from("missions").select("*").eq("date", today).maybeSingle();
-    setMission(data || null);
-    setLoading(false);
-  }, [today]);
-
-  useEffect(() => { loadMission(); }, [loadMission]);
-  useEffect(() => { if (!loading && !mission) setTab("mission"); }, [loading, mission]);
+  var approved = records.filter(function(r) { return r.status === ST.APPROVED; }).length;
 
   return (
-    <div style={{ position: "relative", zIndex: 1 }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-        <Tab active={tab === "mission"} onClick={() => setTab("mission")}>미션 등록</Tab>
-        <Tab active={tab === "status"} onClick={() => setTab("status")}>당일 현황</Tab>
-        <Tab active={tab === "rank"} onClick={() => setTab("rank")}>누적 미수행</Tab>
-        <Tab active={tab === "history"} onClick={() => setTab("history")}>과거 기록</Tab>
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="내 기록" />
+      <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+        <StatBox label="인증완료" value={approved} color={BLUE} />
+        <StatBox label="전체 미션" value={records.length} color={INK} />
+        <StatBox label="인증률" value={(records.length ? Math.round(approved / records.length * 100) : 0) + "%"} color="#10A26A" />
       </div>
-      {loading ? <Loading /> : (
-        <>
-          {tab === "mission" && <MissionForm session={session} today={today} existing={mission} onSaved={async () => { await loadMission(); setTab("status"); }} />}
-          {tab === "status" && <StatusBoard today={today} mission={mission} />}
-          {tab === "rank" && <MissRank />}
-          {tab === "history" && <HistoryPage />}
-        </>
+      {loading ? <CenteredMsg msg="불러오는 중..." /> : (
+        <div style={card({ padding: 0, overflow: "hidden" })}>
+          {records.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: SUB }}>기록이 없습니다.</div>
+          ) : records.map(function(r, i) {
+            return (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderTop: i ? "1px solid #F1F4F9" : "none" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: INK }}>{fmtDate(r.mission_date)}</div>
+                  <div style={{ fontSize: 12, color: SUB, marginTop: 3 }}>제출 {fmtTime(r.submitted_at)}</div>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: stColor(r.status), background: stBg(r.status), padding: "4px 12px", borderRadius: 999 }}>{stLabel(r.status)}</span>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
 
-function MissionForm({ session, today, existing, onSaved }) {
-  const [title, setTitle] = useState(existing?.title || "");
-  const [body, setBody] = useState(existing?.body || "");
-  const [deadline, setDeadline] = useState(existing?.deadline || "23:59");
-  const [selected, setSelected] = useState(new Set(existing?.assignees || []));
-  const [query, setQuery] = useState("");
-  const [members, setMembers] = useState([]);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => { supabase.from("members").select("*").then(({ data }) => setMembers(data || [])); }, []);
-
-  const filtered = useMemo(() => {
-    const q = query.trim();
-    if (!q) return members;
-    return members.filter((m) => m.name.includes(q) || m.school.includes(q) || m.gi.includes(q));
-  }, [query, members]);
-
-  const toggle = (k) => setSelected((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      const row = { date: today, title: title.trim(), body: body.trim() || null, deadline, assignees: [...selected], created_by: session.member.name };
-      const { error } = await supabase.from("missions").upsert(row, { onConflict: "date" });
-      if (error) throw error;
-      await onSaved();
-    } catch (e) { alert("미션 저장 중 오류가 발생했습니다."); console.error(e); }
-    finally { setBusy(false); }
-  };
-
+function StatBox(props) {
   return (
-    <div>
-      <SectionTitle>오늘의 미션 등록</SectionTitle>
-      <div style={glassCard()}>
-        <Field label="미션 제목"><input style={input()} value={title} placeholder="예: 신입 모집 홍보글 게시" onChange={(e) => setTitle(e.target.value)} /></Field>
-        <Field label="미션 내용 (선택)"><textarea style={{ ...input(), height: 72, resize: "vertical", paddingTop: 10 }} value={body} placeholder="게시판 지정, 문구 가이드 등" onChange={(e) => setBody(e.target.value)} /></Field>
-        <Field label="마감 시각"><input style={{ ...input(), width: 150 }} type="time" value={deadline} onChange={(e) => setDeadline(e.target.value)} /></Field>
-        <Field label={`담당자 지정 (${selected.size}명 선택됨)`}><input style={input()} value={query} placeholder="이름 / 학교 / 기수로 검색" onChange={(e) => setQuery(e.target.value)} /></Field>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <button style={ghostBtn()} onClick={() => setSelected(new Set(members.map(keyOf)))}>전체 선택</button>
-          <button style={ghostBtn()} onClick={() => setSelected(new Set())}>전체 해제</button>
-        </div>
-        <div style={{ maxHeight: 260, overflow: "auto", border: `1px solid ${C.line}`, borderRadius: 12, background: "#fff" }}>
-          {filtered.map((m) => {
-            const k = keyOf(m); const on = selected.has(k);
-            return (
-              <label key={k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid #eef1f6", cursor: "pointer", background: on ? C.blueSoft : "transparent", fontSize: 14 }}>
-                <input type="checkbox" checked={on} onChange={() => toggle(k)} />
-                <span style={{ fontWeight: 700 }}>{m.name}</span>
-                <span style={{ color: C.hint, fontSize: 13, fontWeight: 500 }}>{m.gi} · {m.school}</span>
-              </label>
-            );
-          })}
-        </div>
-        <button style={primaryBtn({ width: "100%", marginTop: 16, opacity: title.trim() && selected.size && !busy ? 1 : 0.5 })} disabled={!title.trim() || !selected.size || busy} onClick={save}>
-          {busy ? "저장 중..." : "미션 등록 · 전 부원에게 공개"}
-        </button>
-      </div>
+    <div style={card({ flex: 1, textAlign: "center", padding: 14 })}>
+      <div style={{ fontSize: 11, color: SUB, fontWeight: 600 }}>{props.label}</div>
+      <div style={{ fontSize: 22, fontWeight: 900, color: props.color, marginTop: 4 }}>{props.value}</div>
     </div>
   );
 }
 
-function StatusBoard({ today, mission }) {
-  const [members, setMembers] = useState([]);
-  const [proofsByKey, setProofsByKey] = useState({});
-  const [zoom, setZoom] = useState(null);
-  const [loading, setLoading] = useState(true);
+function MemberProfile(props) {
+  var m = props.session.member;
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <PageHeader title="내 정보" />
+      <div style={card({ marginBottom: 16 })}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 20, fontWeight: 800 }}>
+            {m.name.slice(0, 1)}
+          </div>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: INK }}>{m.name}</div>
+            <div style={{ fontSize: 13, color: SUB }}>{m.gi}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "11px 0", borderTop: "1px solid #F1F4F9" }}>
+          <span style={{ fontSize: 13, color: SUB }}>학교</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: INK }}>{m.school}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "11px 0", borderTop: "1px solid #F1F4F9" }}>
+          <span style={{ fontSize: 13, color: SUB }}>기수</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: INK }}>{m.gi}</span>
+        </div>
+      </div>
+      <button style={btnGhost({ color: "#E04848" })} onClick={props.onLogout}>로그아웃</button>
+    </div>
+  );
+}
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data: mem } = await supabase.from("members").select("*");
-    setMembers(mem || []);
-    const { data: pData } = await supabase.from("proofs").select("*").eq("date", today);
-    const byKey = {}; (pData || []).forEach((p) => { byKey[p.member_key] = p; });
-    setProofsByKey(byKey);
-    setLoading(false);
-  }, [today]);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (!mission) return <div style={{ ...glassCard(), textAlign: "center", fontSize: 14, fontWeight: 600, color: C.sub }}>오늘 등록된 미션이 없습니다. ‘미션 등록’ 탭에서 먼저 등록하세요.</div>;
-  if (loading) return <Loading />;
-
-  const assignees = mission.assignees.map((k) => members.find((m) => keyOf(m) === k)).filter(Boolean);
-  const stOf = (m) => proofsByKey[keyOf(m)]?.status || ST.NONE;
-  const approved = assignees.filter((m) => stOf(m) === ST.APPROVED).length;
-  const pending = assignees.filter((m) => stOf(m) === ST.PENDING).length;
-  const rate = assignees.length ? Math.round((approved / assignees.length) * 100) : 0;
-
-  const decide = async (memberKey, status) => {
-    const p = proofsByKey[memberKey];
-    if (!p) return;
-    await supabase.from("proofs").update({ status }).eq("id", p.id);
-    await load();
-  };
-
-  const markMiss = async () => {
-    if (!confirm("미인증·반려·대기 상태인 담당자의 누적 미수행을 +1 합니다. 진행할까요?")) return;
-    for (const m of assignees) {
-      if (stOf(m) === ST.APPROVED) continue;
-      const k = keyOf(m);
-      const { data: cur } = await supabase.from("miss_counts").select("count").eq("member_key", k).maybeSingle();
-      const next = (cur?.count || 0) + 1;
-      await supabase.from("miss_counts").upsert({ member_key: k, count: next }, { onConflict: "member_key" });
-    }
-    alert("마감 처리가 완료되었습니다.");
-  };
+/* ════════════════════════════════════════════════
+   ADMIN APP
+═══════════════════════════════════════════════════ */
+function AdminApp(props) {
+  var _tab = useState("dashboard"), tab = _tab[0], setTab = _tab[1];
+  var navItems = [
+    { key: "dashboard", label: "대시보드", icon: <NavHome /> },
+    { key: "mission", label: "미션 관리", icon: <NavList /> },
+    { key: "members", label: "부원 관리", icon: <NavUser /> },
+    { key: "certs", label: "인증 현황", icon: <NavCheck /> },
+    { key: "uncert", label: "미인증자 관리", icon: <NavWarn /> },
+  ];
 
   return (
-    <div>
-      <SectionTitle>{mission.title} — 당일 현황</SectionTitle>
-      <div style={{ display: "flex", gap: 9, marginBottom: 18 }}>
-        <Metric label="담당" value={`${assignees.length}명`} />
-        <Metric label="수행" value={`${approved}명`} color={C.done} />
-        <Metric label="대기" value={`${pending}명`} color={C.warn} />
-        <Metric label="인증률" value={`${rate}%`} color={C.blueDeep} />
-      </div>
-      <div style={{ ...glassCard(0.82), padding: 0, overflow: "hidden" }}>
-        {assignees.map((m, i) => {
-          const p = proofsByKey[keyOf(m)]; const st = p?.status || ST.NONE;
-          const summary = p ? checkSummary(p.check_result) : null;
+    <div style={{ minHeight: "100vh", background: "#F4F7FB", fontFamily: FONT, display: "flex" }}>
+      <div style={{ width: 210, background: "#fff", borderRight: "1px solid #E5EAF2", display: "flex", flexDirection: "column", minHeight: "100vh", padding: "24px 0", flexShrink: 0 }}>
+        <div style={{ padding: "0 22px 26px" }}>
+          <img src={mastLogo} alt="MAST" style={{ height: 26, marginBottom: 4 }} />
+          <div style={{ fontSize: 11, color: SUB, fontWeight: 600 }}>관리자 시스템</div>
+        </div>
+        {navItems.map(function(it) {
+          var active = tab === it.key;
           return (
-            <div key={keyOf(m)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "13px 16px", borderTop: i ? "0.5px solid #e4e8f0" : "none", background: st === ST.PENDING ? "#fdf9f0" : "transparent", flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 110 }}>
-                <div style={{ fontSize: 14, fontWeight: 800 }}>{m.name}</div>
-                <div style={{ fontSize: 11, fontWeight: 500, color: C.hint }}>{m.gi} · {m.school}</div>
-              </div>
-              {st === ST.NONE && <span style={pill(C.miss, C.missSoft, 11)}>미인증</span>}
-              {st === ST.REJECTED && <span style={pill(C.miss, C.missSoft, 11)}>반려됨</span>}
-              {summary && st !== ST.NONE && <span style={pill(toneInk(summary.tone), toneBg(summary.tone), 10)}>{summary.label}</span>}
-              {p && <button style={{ ...ghostBtn(), padding: "6px 10px" }} onClick={() => setZoom(p)}>캡처 보기</button>}
-              {st === ST.APPROVED && <span style={pill("#fff", C.done, 11)}>수행</span>}
-              {st === ST.PENDING && (
-                <>
-                  <button style={miniBtn(C.blueDeep)} onClick={() => decide(keyOf(m), ST.APPROVED)}>승인</button>
-                  <button style={miniBtn(C.miss)} onClick={() => decide(keyOf(m), ST.REJECTED)}>반려</button>
-                </>
-              )}
-            </div>
+            <button key={it.key} onClick={function() { setTab(it.key); }}
+              style={{ border: "none", background: active ? "#EEF3FB" : "none", cursor: "pointer", fontFamily: FONT, display: "flex", alignItems: "center", gap: 10, padding: "12px 22px", color: active ? BLUE : "#4A5568", fontWeight: active ? 800 : 600, fontSize: 14, borderLeft: active ? "3px solid " + BLUE : "3px solid transparent", textAlign: "left", width: "100%" }}>
+              <span style={{ display: "flex", color: active ? BLUE : "#9AA3B2" }}>{it.icon}</span>
+              {it.label}
+            </button>
           );
         })}
-      </div>
-      <button style={dangerBtn({ marginTop: 16 })} onClick={markMiss}>마감 처리 · 미수행자 누적 미수행 +1</button>
-      {zoom && (
-        <div onClick={() => setZoom(null)} style={{ position: "fixed", inset: 0, background: "rgba(30,30,50,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: 16, maxWidth: 520, width: "100%" }}>
-            <img src={zoom.image_url} alt="인증 캡처" style={{ width: "100%", borderRadius: 10 }} />
-            {zoom.link && <a href={zoom.link} target="_blank" rel="noreferrer" style={{ color: C.blue, fontSize: 13, fontWeight: 500 }}>{zoom.link}</a>}
-            {zoom.memo && <div style={{ fontSize: 13, fontWeight: 500, color: C.sub, marginTop: 4 }}>메모: {zoom.memo}</div>}
-            <button style={ghostBtn({ width: "100%", marginTop: 12 })} onClick={() => setZoom(null)}>닫기</button>
-          </div>
+        <div style={{ marginTop: "auto", padding: "0 22px" }}>
+          <button onClick={props.onLogout} style={{ border: "none", background: "none", cursor: "pointer", fontFamily: FONT, display: "flex", alignItems: "center", gap: 8, color: SUB, fontSize: 13, padding: "12px 0", fontWeight: 600 }}>
+            로그아웃
+          </button>
         </div>
-      )}
+      </div>
+
+      <div style={{ flex: 1, padding: "24px 28px", overflow: "auto", minHeight: "100vh" }}>
+        {tab === "dashboard" && <AdminDashboard onTab={setTab} />}
+        {tab === "mission" && <AdminMission session={props.session} />}
+        {tab === "members" && <AdminMembers />}
+        {tab === "certs" && <AdminCerts />}
+        {tab === "uncert" && <AdminUncert />}
+      </div>
     </div>
   );
 }
 
-function MissRank() {
-  const THRESHOLD = 3;
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+function AdminDashboard(props) {
+  var today = todayKST();
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
+  var _members = useState([]), members = _members[0], setMembers = _members[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+  var _cd = useState(""), cd = _cd[0], setCd = _cd[1];
 
-  useEffect(() => {
-    (async () => {
-      const { data: counts } = await supabase.from("miss_counts").select("*").gt("count", 0).order("count", { ascending: false });
-      const { data: mem } = await supabase.from("members").select("*");
-      const byKey = {}; (mem || []).forEach((m) => { byKey[keyOf(m)] = m; });
-      setRows((counts || []).map((c) => ({ m: byKey[c.member_key], c: c.count })).filter((r) => r.m));
-      setLoading(false);
-    })();
-  }, []);
+  var load = useCallback(async function() {
+    setLoading(true);
+    var r1 = await supabase.from("missions").select("*").eq("mission_date", today).maybeSingle();
+    setMission(r1.data || null);
+    if (r1.data) {
+      var r2 = await supabase.from("proofs").select("*").eq("mission_date", today);
+      setProofs(r2.data || []);
+    }
+    var r3 = await supabase.from("members").select("*");
+    setMembers(r3.data || []);
+    setLoading(false);
+  }, [today]);
 
-  if (loading) return <Loading />;
+  useEffect(function() { load(); }, [load]);
+
+  useEffect(function() {
+    if (!mission) return;
+    function tick() {
+      var now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+      var parts = (mission.deadline || "23:59").split(":");
+      var deadline = new Date(now);
+      deadline.setHours(parseInt(parts[0]), parseInt(parts[1] || 0), 0, 0);
+      var diff = deadline - now;
+      if (diff <= 0) { setCd("마감"); return; }
+      var h = Math.floor(diff / 3600000);
+      var m = Math.floor((diff % 3600000) / 60000);
+      var s = Math.floor((diff % 60000) / 1000);
+      setCd(String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0"));
+    }
+    tick();
+    var timer = setInterval(tick, 1000);
+    return function() { clearInterval(timer); };
+  }, [mission]);
+
+  if (loading) return <div style={{ color: SUB }}>불러오는 중...</div>;
+
+  var assignees = mission ? (mission.assignees || []) : [];
+  var assigneeMembers = assignees.map(function(k) { return members.find(function(m) { return keyOf(m) === k; }) || { name: k.split("|")[0], gi: k.split("|")[1], school: k.split("|")[2] }; });
+  var approvedProofs = proofs.filter(function(p) { return p.status === ST.APPROVED; });
+  var pendingProofs = proofs.filter(function(p) { return p.status === ST.PENDING; });
+  var notSubmitted = assigneeMembers.filter(function(m) { return !proofs.find(function(p) { return p.member_key === keyOf(m); }); });
 
   return (
     <div>
-      <SectionTitle>누적 미수행 랭킹</SectionTitle>
-      {rows.length === 0 ? (
-        <div style={{ ...glassCard(), textAlign: "center", fontSize: 14, fontWeight: 600, color: C.sub }}>아직 누적된 미수행 기록이 없습니다.</div>
-      ) : (
-        <div style={{ ...glassCard(0.82), padding: 0, overflow: "hidden" }}>
-          {rows.map((r, i) => {
-            const flagged = r.c >= THRESHOLD;
-            return (
-              <div key={keyOf(r.m)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px", borderTop: i ? "0.5px solid #e4e8f0" : "none", background: flagged ? C.missSoft : "transparent" }}>
-                <span style={{ width: 22, fontWeight: 700, color: C.hint, fontSize: 13 }}>{i + 1}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800 }}>{r.m.name}</div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: C.hint }}>{r.m.gi} · {r.m.school}</div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 4 }}>관리자 대시보드</div>
+      <div style={{ fontSize: 13, color: SUB, marginBottom: 22 }}>오늘의 홍보 미션 현황을 한눈에 확인하세요.</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+        <div style={card({ background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", color: "#fff", position: "relative", overflow: "visible" })}>
+          <img src={megaphoneImg} alt="" style={{ position: "absolute", right: -10, top: -20, width: 100, height: "auto", filter: "drop-shadow(0 8px 16px rgba(0,0,0,0.15))" }} />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6, fontWeight: 600 }}>오늘의 미션</div>
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>{mission ? mission.title : "미션 없음"}</div>
+            {mission && <div style={{ fontSize: 12, opacity: 0.85, display: "flex", alignItems: "center", gap: 4 }}><IconClock color="#fff" />마감 {mission.deadline}</div>}
+          </div>
+        </div>
+        <div style={card({ background: notSubmitted.length > 0 ? "#FFF5F5" : "#F0FAF5", cursor: "pointer", position: "relative", display: "flex", alignItems: "center", gap: 14 })} onClick={function() { props.onTab("uncert"); }}>
+          {notSubmitted.length > 0 && <img src={sirenImg} alt="" style={{ height: 110, width: "auto", flexShrink: 0, filter: "drop-shadow(0 8px 16px rgba(224,72,72,0.25))" }} />}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: SUB, marginBottom: 4, fontWeight: 600 }}>미제출자</div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: notSubmitted.length > 0 ? "#E04848" : "#10A26A", marginBottom: 4 }}>{notSubmitted.length}명</div>
+            <div style={{ fontSize: 12, color: SUB }}>마감까지 {cd}</div>
+          </div>
+        </div>
+        <div style={card({ cursor: "pointer" })} onClick={function() { props.onTab("certs"); }}>
+          <div style={{ fontSize: 11, color: SUB, marginBottom: 4, fontWeight: 600 }}>인증 완료</div>
+          <div style={{ fontSize: 28, fontWeight: 900, color: "#10A26A", marginBottom: 4 }}>{approvedProofs.length}명</div>
+          <div style={{ fontSize: 12, color: SUB }}>/ {assignees.length}명</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+        <ListPanel title={"인증 완료 (" + approvedProofs.length + "명)"} titleColor="#10A26A">
+          {approvedProofs.length === 0 ? <Empty /> : approvedProofs.map(function(p) {
+            return <ListRow key={p.id} name={p.member_name} sub={fmtTime(p.submitted_at) + " 인증"} badge={<IconCheck color="#10A26A" />} />;
+          })}
+        </ListPanel>
+
+        <ListPanel title={"제출됨 " + pendingProofs.length + " · 미제출 " + notSubmitted.length} titleColor="#E04848">
+          {pendingProofs.map(function(p) {
+            return <ListRow key={p.id} name={p.member_name} sub="제출됨 (검토 대기)" badge={<IconDot color="#3B72E8" size={12} />} onClick={function() { props.onTab("certs"); }} />;
+          })}
+          {notSubmitted.map(function(m) {
+            return <ListRow key={keyOf(m)} name={m.name} sub="미제출" badge={<IconDot color="#E04848" size={12} />} />;
+          })}
+          {pendingProofs.length === 0 && notSubmitted.length === 0 && <Empty />}
+        </ListPanel>
+
+        <ListPanel title={"오늘 대상자 (총 " + assignees.length + "명)"}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 14 }}>
+            {assigneeMembers.map(function(m) {
+              return (
+                <div key={keyOf(m)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: 56 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 13 }}>{m.name.slice(0, 1)}</div>
+                  <div style={{ fontSize: 11, textAlign: "center", color: INK, fontWeight: 700 }}>{m.name}</div>
                 </div>
-                {flagged && <span style={pill(C.miss, "#fff", 11)}>지속 미수행</span>}
-                <span style={{ fontSize: 16, fontWeight: 800, color: flagged ? C.miss : C.ink }}>{r.c}회</span>
+              );
+            })}
+          </div>
+        </ListPanel>
+      </div>
+
+      <div style={card()}>
+        <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 14 }}>빠른 기능</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+          {[
+            { icon: <IconClipboard />, label: "미션 생성", tab: "mission" },
+            { icon: <IconUsers />, label: "부원 관리", tab: "members" },
+            { icon: <IconSiren />, label: "미인증자 보기", tab: "uncert" },
+            { icon: <IconCheckCircle />, label: "인증 현황", tab: "certs" },
+          ].map(function(q) {
+            return (
+              <button key={q.tab} onClick={function() { props.onTab(q.tab); }}
+                style={{ border: "1px solid #E5EAF2", borderRadius: 14, padding: "18px 12px", background: "#F8FAFF", cursor: "pointer", fontFamily: FONT, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                {q.icon}
+                <span style={{ fontSize: 12, fontWeight: 700, color: INK }}>{q.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ListPanel(props) {
+  return (
+    <div style={card({ padding: 0, overflow: "hidden" })}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F4F9" }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: props.titleColor || INK }}>{props.title}</span>
+      </div>
+      {props.children}
+    </div>
+  );
+}
+function ListRow(props) {
+  return (
+    <div onClick={props.onClick} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 18px", borderTop: "1px solid #F1F4F9", cursor: props.onClick ? "pointer" : "default" }}>
+      <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#EEF3FB", display: "flex", alignItems: "center", justifyContent: "center", color: BLUE, fontWeight: 800, fontSize: 13 }}>{props.name.slice(0, 1)}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>{props.name}</div>
+        <div style={{ fontSize: 11, color: SUB }}>{props.sub}</div>
+      </div>
+      <span style={{ fontSize: 16, display: "flex", alignItems: "center" }}>{props.badge}</span>
+    </div>
+  );
+}
+function Empty() { return <div style={{ padding: 18, fontSize: 13, color: SUB, textAlign: "center" }}>없음</div>; }
+
+/* ─── 관리자 미션 관리 (수정·삭제 포함) ─── */
+function AdminMission(props) {
+  var today = todayKST();
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _members = useState([]), members = _members[0], setMembers = _members[1];
+  var _title = useState(""), title = _title[0], setTitle = _title[1];
+  var _body = useState(""), body = _body[0], setBody = _body[1];
+  var _deadline = useState("23:59"), deadline = _deadline[0], setDeadline = _deadline[1];
+  var _selected = useState(new Set()), selected = _selected[0], setSelected = _selected[1];
+  var _query = useState(""), query = _query[0], setQuery = _query[1];
+  var _busy = useState(false), busy = _busy[0], setBusy = _busy[1];
+  var _msg = useState(""), msg = _msg[0], setMsg = _msg[1];
+  var _pastMissions = useState([]), pastMissions = _pastMissions[0], setPastMissions = _pastMissions[1];
+  var _imgFile = useState(null), imgFile = _imgFile[0], setImgFile = _imgFile[1];
+  var _imgPreview = useState(null), imgPreview = _imgPreview[0], setImgPreview = _imgPreview[1];
+  var imgRef = useRef(null);
+
+  var load = useCallback(async function() {
+    var r1 = await supabase.from("missions").select("*").eq("mission_date", today).maybeSingle();
+    if (r1.data) {
+      setMission(r1.data);
+      setTitle(r1.data.title || ""); setBody(r1.data.body || ""); setDeadline(r1.data.deadline || "23:59");
+      setSelected(new Set(r1.data.assignees || []));
+      if (r1.data.mission_image_url) setImgPreview(r1.data.mission_image_url);
+    } else {
+      setMission(null); setTitle(""); setBody(""); setDeadline("23:59"); setSelected(new Set()); setImgPreview(null);
+    }
+    var r2 = await supabase.from("members").select("*");
+    setMembers(r2.data || []);
+    var r3 = await supabase.from("missions").select("*").lt("mission_date", today).order("mission_date", { ascending: false }).limit(10);
+    setPastMissions(r3.data || []);
+  }, [today]);
+
+  useEffect(function() { load(); }, [load]);
+
+  var filtered = query.trim() ? members.filter(function(m) { return m.name.includes(query) || m.school.includes(query) || m.gi.includes(query); }) : members;
+
+  function pickImage(e) {
+    var f = e.target.files ? e.target.files[0] : null;
+    if (!f) return;
+    setImgFile(f);
+    var reader = new FileReader();
+    reader.onload = function() { setImgPreview(reader.result); };
+    reader.readAsDataURL(f);
+  }
+
+  async function save() {
+    if (!title.trim() || selected.size === 0) { setMsg("미션 제목과 담당자를 입력해 주세요."); return; }
+    setBusy(true); setMsg("");
+    try {
+      var row = { mission_date: today, title: title.trim(), body: body.trim() || null, deadline: deadline, assignees: Array.from(selected), created_by: props.session.member.name };
+
+      if (imgFile) {
+        if (mission && mission.mission_image_path) {
+          await supabase.storage.from(MISSION_BUCKET).remove([mission.mission_image_path]);
+        }
+        var ext = (imgFile.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        var path = today + "_" + Date.now() + "." + ext;
+        var upRes = await supabase.storage.from(MISSION_BUCKET).upload(path, imgFile, { upsert: true });
+        if (upRes.error) throw upRes.error;
+        row.mission_image_url = supabase.storage.from(MISSION_BUCKET).getPublicUrl(path).data.publicUrl;
+        row.mission_image_path = path;
+      }
+
+      var r;
+      if (mission) {
+        r = await supabase.from("missions").update(row).eq("id", mission.id);
+      } else {
+        r = await supabase.from("missions").upsert(row, { onConflict: "mission_date" });
+      }
+      if (r.error) throw r.error;
+      setMsg("저장되었습니다. 전 부원에게 공개됩니다.");
+      setImgFile(null);
+      await load();
+    } catch(e) { setMsg("저장 중 오류가 발생했습니다: " + e.message); console.error(e); }
+    finally { setBusy(false); }
+  }
+
+  async function removeImage() {
+    if (!mission || !mission.mission_image_path) {
+      setImgFile(null); setImgPreview(null); return;
+    }
+    if (!confirm("미션 첨부 이미지를 삭제하시겠습니까?")) return;
+    await supabase.storage.from(MISSION_BUCKET).remove([mission.mission_image_path]);
+    await supabase.from("missions").update({ mission_image_url: null, mission_image_path: null }).eq("id", mission.id);
+    setImgFile(null); setImgPreview(null);
+    await load();
+  }
+
+  async function deleteMission(m) {
+    if (!confirm("미션 \"" + m.title + "\" 을(를) 완전히 삭제하시겠습니까?\n관련된 부원들의 인증 기록도 모두 삭제됩니다.")) return;
+    // 1. 미션 이미지 삭제
+    if (m.mission_image_path) {
+      await supabase.storage.from(MISSION_BUCKET).remove([m.mission_image_path]);
+    }
+    // 2. 인증 사진들 삭제
+    var proofs = await supabase.from("proofs").select("proof_file_path").eq("mission_id", m.id);
+    var paths = (proofs.data || []).map(function(p) { return p.proof_file_path; }).filter(Boolean);
+    if (paths.length) await supabase.storage.from(PROOF_BUCKET).remove(paths);
+    // 3. proofs는 cascade로 자동 삭제됨. 미션 삭제.
+    await supabase.from("missions").delete().eq("id", m.id);
+    await load();
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 20 }}>미션 관리</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <div style={card()}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{mission ? "오늘 미션 수정" : "오늘 미션 등록"}</div>
+            {mission && (
+              <button onClick={function() { deleteMission(mission); }} style={btnSmall({ background: "#FDECEC", color: "#E04848" })}>오늘 미션 삭제</button>
+            )}
+          </div>
+          <AField label="미션 제목">
+            <input style={aInput()} value={title} placeholder="예: 2026-2학기 신입부원 모집 홍보" onChange={function(e) { setTitle(e.target.value); }} />
+          </AField>
+          <AField label="미션 내용 (선택, 줄바꿈 유지됨)">
+            <textarea style={Object.assign({}, aInput(), { height: 100, resize: "vertical" })} value={body} placeholder={"상세 내용\n예시:\n1. 학과 게시판에 게시\n2. 신청 링크 포함"} onChange={function(e) { setBody(e.target.value); }} />
+          </AField>
+          <AField label="마감 시각">
+            <input style={Object.assign({}, aInput(), { width: 140 })} type="time" value={deadline} onChange={function(e) { setDeadline(e.target.value); }} />
+          </AField>
+
+          <AField label="첨부 이미지 (선택) — 부원이 다운로드해서 에타에 업로드">
+            {imgPreview ? (
+              <div>
+                <img src={imgPreview} alt="미리보기" style={{ width: "100%", maxHeight: 200, objectFit: "contain", borderRadius: 10, border: "1px solid #E5EAF2" }} />
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button onClick={function() { imgRef.current && imgRef.current.click(); }} style={btnSmall({ background: "#F0F4FB", color: BLUE })}>변경</button>
+                  <button onClick={removeImage} style={btnSmall({ background: "#FDECEC", color: "#E04848" })}>삭제</button>
+                </div>
+              </div>
+            ) : (
+              <div onClick={function() { imgRef.current && imgRef.current.click(); }}
+                style={{ border: "2px dashed #BCD0F0", borderRadius: 10, padding: 20, textAlign: "center", cursor: "pointer", background: "#F8FAFF" }}>
+                <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}><IconAttach color={SUB} /></div>
+                <div style={{ fontSize: 13, color: SUB }}>이미지 첨부</div>
+              </div>
+            )}
+            <input ref={imgRef} type="file" accept="image/*" onChange={pickImage} style={{ display: "none" }} />
+          </AField>
+
+          <AField label={"담당자 지정 (" + selected.size + "명)"}>
+            <input style={aInput()} value={query} placeholder="이름/학교/기수 검색" onChange={function(e) { setQuery(e.target.value); }} />
+          </AField>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <button style={btnSmall({ background: "#F8FAFF", border: "1px solid #DDE4F0" })} onClick={function() { setSelected(new Set(members.map(keyOf))); }}>전체 선택</button>
+            <button style={btnSmall({ background: "#F8FAFF", border: "1px solid #DDE4F0" })} onClick={function() { setSelected(new Set()); }}>전체 해제</button>
+          </div>
+          <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid #E5EAF2", borderRadius: 10, marginBottom: 14, background: "#fff" }}>
+            {filtered.map(function(m) {
+              var k = keyOf(m), on = selected.has(k);
+              return (
+                <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderTop: "1px solid #F1F4F9", cursor: "pointer", background: on ? "#EEF3FB" : "#fff" }}>
+                  <input type="checkbox" checked={on} onChange={function() { setSelected(function(prev) { var n = new Set(prev); if(n.has(k)) n.delete(k); else n.add(k); return n; }); }} />
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>{m.name}</span>
+                  <span style={{ fontSize: 12, color: SUB }}>{m.gi + " · " + m.school}</span>
+                </label>
+              );
+            })}
+          </div>
+          {msg && <div style={{ fontSize: 13, color: msg.indexOf("오류") !== -1 ? "#E04848" : "#10A26A", marginBottom: 10, fontWeight: 600 }}>{msg}</div>}
+          <button style={btnPrimary({ opacity: busy ? 0.7 : 1, padding: "12px 0", fontSize: 14 })} disabled={busy} onClick={save}>
+            {busy ? "저장 중..." : mission ? "미션 수정 저장" : "미션 등록 (전 부원 공개)"}
+          </button>
+        </div>
+
+        <div style={card({ padding: 0, overflow: "hidden", alignSelf: "start" })}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid #F1F4F9", fontSize: 16, fontWeight: 800 }}>과거 미션 기록</div>
+          {pastMissions.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", fontSize: 13, color: SUB }}>과거 미션이 없습니다.</div>
+          ) : pastMissions.map(function(m, i) {
+            return (
+              <div key={m.id} style={{ padding: "13px 20px", borderTop: i ? "1px solid #F1F4F9" : "none", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: INK }}>{m.title}</div>
+                  <div style={{ fontSize: 12, color: SUB, marginTop: 3 }}>{m.mission_date + " · " + (m.assignees || []).length + "명 담당"}</div>
+                </div>
+                <button onClick={function() { deleteMission(m); }} style={btnSmall({ background: "#FDECEC", color: "#E04848" })}>삭제</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 관리자 부원 관리 (추가·수정·삭제, 상세 모달) ─── */
+function AdminMembers() {
+  var _members = useState([]), members = _members[0], setMembers = _members[1];
+  var _proofStats = useState({}), proofStats = _proofStats[0], setProofStats = _proofStats[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+  var _query = useState(""), query = _query[0], setQuery = _query[1];
+  var _detail = useState(null), detail = _detail[0], setDetail = _detail[1];
+  var _editing = useState(null), editing = _editing[0], setEditing = _editing[1];
+  var _showAdd = useState(false), showAdd = _showAdd[0], setShowAdd = _showAdd[1];
+
+  var load = useCallback(async function() {
+    setLoading(true);
+    var r1 = await supabase.from("members").select("*").order("name");
+    setMembers(r1.data || []);
+    var r2 = await supabase.from("proofs").select("member_key, status");
+    var stats = {};
+    (r2.data || []).forEach(function(p) {
+      if (!stats[p.member_key]) stats[p.member_key] = { total: 0, approved: 0, rejected: 0, pending: 0 };
+      stats[p.member_key].total++;
+      if (p.status === ST.APPROVED) stats[p.member_key].approved++;
+      else if (p.status === ST.REJECTED) stats[p.member_key].rejected++;
+      else if (p.status === ST.PENDING) stats[p.member_key].pending++;
+    });
+    setProofStats(stats);
+    setLoading(false);
+  }, []);
+
+  useEffect(function() { load(); }, [load]);
+
+  async function deleteMember(m) {
+    if (!confirm("부원 \"" + m.name + "\" 을(를) 명단에서 삭제하시겠습니까?\n인증 기록도 함께 삭제됩니다.")) return;
+    var k = keyOf(m);
+    // 인증 사진들 삭제
+    var proofs = await supabase.from("proofs").select("proof_file_path").eq("member_key", k);
+    var paths = (proofs.data || []).map(function(p) { return p.proof_file_path; }).filter(Boolean);
+    if (paths.length) await supabase.storage.from(PROOF_BUCKET).remove(paths);
+    await supabase.from("proofs").delete().eq("member_key", k);
+    await supabase.from("members").delete().eq("name", m.name).eq("gi", m.gi).eq("school", m.school);
+    await load();
+  }
+
+  var filtered = query.trim() ? members.filter(function(m) { return m.name.includes(query) || m.school.includes(query) || m.gi.includes(query); }) : members;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontSize: 24, fontWeight: 900, color: INK }}>부원 관리</div>
+        <button onClick={function() { setShowAdd(true); }} style={btnPrimary({ width: "auto", padding: "10px 18px", fontSize: 14 })}>+ 부원 추가</button>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <input style={Object.assign({}, aInput(), { maxWidth: 320 })} value={query} placeholder="이름/학교/기수 검색" onChange={function(e) { setQuery(e.target.value); }} />
+      </div>
+      <div style={{ fontSize: 12, color: SUB, marginBottom: 10 }}>부원을 클릭하면 상세 인증 이력을 볼 수 있습니다.</div>
+      {loading ? <div style={{ color: SUB }}>불러오는 중...</div> : (
+        <div style={card({ padding: 0, overflow: "hidden" })}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.8fr 0.8fr 0.8fr 1.2fr 1fr", padding: "13px 20px", borderBottom: "1px solid #F1F4F9", background: "#F8FAFF" }}>
+            {["이름", "학교", "기수", "총 수행", "인증률", "관리"].map(function(h) {
+              return <div key={h} style={{ fontSize: 12, fontWeight: 800, color: SUB }}>{h}</div>;
+            })}
+          </div>
+          {filtered.map(function(m, i) {
+            var k = keyOf(m);
+            var st = proofStats[k] || { total: 0, approved: 0 };
+            var rate = st.total > 0 ? Math.round(st.approved / st.total * 100) : 0;
+            return (
+              <div key={k} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.8fr 0.8fr 0.8fr 1.2fr 1fr", padding: "13px 20px", borderTop: i ? "1px solid #F1F4F9" : "none", alignItems: "center" }}>
+                <div onClick={function() { setDetail(m); }} style={{ fontWeight: 700, fontSize: 14, color: BLUE, cursor: "pointer" }}>{m.name} ›</div>
+                <div style={{ fontSize: 13, color: "#4A5568" }}>{m.school}</div>
+                <div style={{ fontSize: 13, color: SUB }}>{m.gi}</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: BLUE }}>{st.approved}회</div>
+                <div>
+                  <div style={{ height: 6, background: "#F1F4F9", borderRadius: 999, width: 90 }}>
+                    <div style={{ height: 6, background: rate >= 80 ? "#10A26A" : rate >= 50 ? BLUE : "#E05A00", borderRadius: 999, width: rate + "%" }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: SUB, marginTop: 2 }}>{rate}%</div>
+                </div>
+                <div style={{ display: "flex", gap: 5 }}>
+                  <button onClick={function() { setEditing(m); }} style={btnSmall({ background: "#F0F4FB", color: BLUE, padding: "5px 10px" })}>수정</button>
+                  <button onClick={function() { deleteMember(m); }} style={btnSmall({ background: "#FDECEC", color: "#E04848", padding: "5px 10px" })}>삭제</button>
+                </div>
               </div>
             );
           })}
         </div>
       )}
-      <p style={{ fontSize: 12, fontWeight: 500, color: C.sub, marginTop: 12 }}>누적 미수행 {THRESHOLD}회 이상이면 ‘지속 미수행’으로 자동 표시됩니다.</p>
+
+      {detail && <MemberDetailModal member={detail} onClose={function() { setDetail(null); }} onChanged={load} />}
+      {(showAdd || editing) && <MemberFormModal member={editing} onClose={function() { setShowAdd(false); setEditing(null); }} onSaved={function() { setShowAdd(false); setEditing(null); load(); }} />}
     </div>
   );
 }
 
-function HistoryPage() {
-  const [dates, setDates] = useState([]);
-  const [selDate, setSelDate] = useState("");
-  const [mission, setMission] = useState(null);
-  const [proofs, setProofs] = useState([]);
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [zoom, setZoom] = useState(null);
+function MemberFormModal(props) {
+  var isEdit = !!props.member;
+  var _n = useState(isEdit ? props.member.name : ""), name = _n[0], setName = _n[1];
+  var _g = useState(isEdit ? props.member.gi : ""), gi = _g[0], setGi = _g[1];
+  var _sc = useState(isEdit ? props.member.school : ""), school = _sc[0], setSchool = _sc[1];
+  var _busy = useState(false), busy = _busy[0], setBusy = _busy[1];
+  var _err = useState(""), err = _err[0], setErr = _err[1];
 
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("missions").select("date, title").order("date", { ascending: false });
-      setDates(data || []);
-      setLoading(false);
-    })();
-  }, []);
-
-  const loadDetail = async (date) => {
-    setSelDate(date); setDetailLoading(true);
-    const { data: m } = await supabase.from("missions").select("*").eq("date", date).maybeSingle();
-    const { data: p } = await supabase.from("proofs").select("*").eq("date", date);
-    const { data: mem } = await supabase.from("members").select("*");
-    setMission(m || null); setProofs(p || []); setMembers(mem || []);
-    setDetailLoading(false);
-  };
-
-  if (loading) return <Loading />;
-
-  const proofsByKey = {};
-  proofs.forEach((p) => { proofsByKey[p.member_key] = p; });
-  const assignees = mission ? (mission.assignees || []).map((k) => members.find((m) => keyOf(m) === k)).filter(Boolean) : [];
-  const approved = assignees.filter((m) => proofsByKey[keyOf(m)]?.status === ST.APPROVED).length;
+  async function save() {
+    if (!name.trim() || !gi.trim() || !school.trim()) { setErr("모든 항목을 입력해 주세요."); return; }
+    setBusy(true); setErr("");
+    try {
+      if (isEdit) {
+        var r = await supabase.from("members").update({ name: name.trim(), gi: gi.trim(), school: school.trim() })
+          .eq("name", props.member.name).eq("gi", props.member.gi).eq("school", props.member.school);
+        if (r.error) throw r.error;
+      } else {
+        var r2 = await supabase.from("members").insert({ name: name.trim(), gi: gi.trim(), school: school.trim() });
+        if (r2.error) throw r2.error;
+      }
+      props.onSaved();
+    } catch(e) { setErr("저장 실패: " + e.message); }
+    finally { setBusy(false); }
+  }
 
   return (
-    <div>
-      <SectionTitle>과거 미션 기록</SectionTitle>
-      <div style={{ ...glassCard(0.82), padding: 0, overflow: "hidden", marginBottom: 18 }}>
-        {dates.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.sub }}>기록이 없습니다.</div>}
-        {dates.map((d, i) => (
-          <div key={d.date} onClick={() => loadDetail(d.date)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", borderTop: i ? "0.5px solid #e4e8f0" : "none", cursor: "pointer", background: selDate === d.date ? C.blueSoft : "transparent" }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{d.date}</div>
-              <div style={{ fontSize: 12, fontWeight: 500, color: C.sub }}>{d.title}</div>
-            </div>
-            <span style={{ fontSize: 12, color: C.sub2, fontWeight: 700 }}>▶</span>
-          </div>
-        ))}
+    <Modal onClose={props.onClose}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{isEdit ? "부원 수정" : "부원 추가"}</div>
+      <AField label="이름"><input style={aInput()} value={name} onChange={function(e) { setName(e.target.value); }} placeholder="홍길동" /></AField>
+      <AField label="기수"><input style={aInput()} value={gi} onChange={function(e) { setGi(e.target.value); }} placeholder="26기" /></AField>
+      <AField label="학교"><input style={aInput()} value={school} onChange={function(e) { setSchool(e.target.value); }} placeholder="홍익대학교" /></AField>
+      {err && <div style={{ fontSize: 13, color: "#E04848", marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10 }}>
+        <button style={btnGhost()} onClick={props.onClose}>취소</button>
+        <button style={btnPrimary({ opacity: busy ? 0.6 : 1 })} disabled={busy} onClick={save}>{busy ? "저장 중..." : "저장"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function MemberDetailModal(props) {
+  var member = props.member;
+  var myKey = keyOf(member);
+  var _data = useState(null), data = _data[0], setData = _data[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+
+  var load = useCallback(async function() {
+    setLoading(true);
+    var r1 = await supabase.from("missions").select("*").order("mission_date", { ascending: false });
+    var r2 = await supabase.from("proofs").select("*").eq("member_key", myKey);
+
+    var allMissions = r1.data || [];
+    var myProofs = r2.data || [];
+    var proofMap = {};
+    myProofs.forEach(function(p) { proofMap[p.mission_date] = p; });
+
+    var myMissions = allMissions.filter(function(m) { return (m.assignees || []).indexOf(myKey) !== -1; });
+
+    var rows = myMissions.map(function(m) {
+      var p = proofMap[m.mission_date];
+      return {
+        mission_date: m.mission_date, title: m.title,
+        status: p ? p.status : "none",
+        submitted_at: p ? p.submitted_at : null,
+        proof_id: p ? p.id : null,
+        proof_file_path: p ? p.proof_file_path : null,
+      };
+    });
+
+    var stats = {
+      total: rows.length,
+      approved: rows.filter(function(r) { return r.status === ST.APPROVED; }).length,
+      pending: rows.filter(function(r) { return r.status === ST.PENDING; }).length,
+      rejected: rows.filter(function(r) { return r.status === ST.REJECTED; }).length,
+    };
+    setData({ rows: rows, stats: stats });
+    setLoading(false);
+  }, [myKey]);
+
+  useEffect(function() { load(); }, [load]);
+
+  async function deleteRecord(row) {
+    if (!confirm(row.mission_date + " 기록을 삭제하시겠습니까?")) return;
+    if (row.proof_file_path) await supabase.storage.from(PROOF_BUCKET).remove([row.proof_file_path]);
+    if (row.proof_id) await supabase.from("proofs").delete().eq("id", row.proof_id);
+    await load();
+    if (props.onChanged) props.onChanged();
+  }
+
+  var rate = data && data.stats.total > 0 ? Math.round(data.stats.approved / data.stats.total * 100) : 0;
+
+  return (
+    <Modal onClose={props.onClose} maxWidth={760}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+        <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 22, fontWeight: 900 }}>{member.name.slice(0, 1)}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: INK }}>{member.name}</div>
+          <div style={{ fontSize: 13, color: SUB }}>{member.gi + " · " + member.school}</div>
+        </div>
       </div>
 
-      {selDate && (
-        detailLoading ? <Loading /> : !mission ? (
-          <div style={{ ...glassCard(), textAlign: "center", fontSize: 14, color: C.sub }}>미션 정보를 불러올 수 없습니다.</div>
-        ) : (
-          <div>
-            <SectionTitle>{mission.date} · {mission.title}</SectionTitle>
-            <div style={{ display: "flex", gap: 9, marginBottom: 18 }}>
-              <Metric label="담당" value={`${assignees.length}명`} />
-              <Metric label="수행" value={`${approved}명`} color={C.done} />
-              <Metric label="인증률" value={`${assignees.length ? Math.round(approved / assignees.length * 100) : 0}%`} color={C.blueDeep} />
-            </div>
-            <div style={{ ...glassCard(0.82), padding: 0, overflow: "hidden" }}>
-              {assignees.map((m, i) => {
-                const p = proofsByKey[keyOf(m)]; const st = p?.status || ST.NONE;
-                const summary = p ? checkSummary(p.check_result) : null;
+      {loading ? <div style={{ textAlign: "center", padding: 30, color: SUB }}>불러오는 중...</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+            <StatMini label="총 담당" value={data.stats.total} color={INK} />
+            <StatMini label="인증완료" value={data.stats.approved} color="#10A26A" />
+            <StatMini label="제출됨" value={data.stats.pending} color={BLUE} />
+            <StatMini label="사진반려" value={data.stats.rejected} color="#E04848" />
+            <StatMini label="인증률" value={rate + "%"} color={rate >= 80 ? "#10A26A" : rate >= 50 ? BLUE : "#E05A00"} />
+          </div>
+
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>전체 인증 이력</div>
+          {data.rows.length === 0 ? (
+            <div style={{ padding: 30, textAlign: "center", fontSize: 13, color: SUB, background: "#F8FAFF", borderRadius: 12 }}>담당했던 미션이 없습니다.</div>
+          ) : (
+            <div style={{ border: "1px solid #F1F4F9", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.6fr 0.8fr 1.4fr 0.7fr 0.6fr", padding: "10px 14px", background: "#F8FAFF", fontSize: 12, fontWeight: 800, color: SUB }}>
+                <div>날짜</div><div>미션</div><div>상태</div><div>특이사항</div><div>제출</div><div>관리</div>
+              </div>
+              {data.rows.map(function(r) {
                 return (
-                  <div key={keyOf(m)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "13px 16px", borderTop: i ? "0.5px solid #e4e8f0" : "none", flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 110 }}>
-                      <div style={{ fontSize: 14, fontWeight: 800 }}>{m.name}</div>
-                      <div style={{ fontSize: 11, fontWeight: 500, color: C.hint }}>{m.gi} · {m.school}</div>
+                  <div key={r.mission_date} style={{ display: "grid", gridTemplateColumns: "0.8fr 1.6fr 0.8fr 1.4fr 0.7fr 0.6fr", padding: "12px 14px", borderTop: "1px solid #F1F4F9", alignItems: "center", background: r.status === ST.REJECTED ? "#FFF8F8" : "#fff" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>{r.mission_date}</div>
+                    <div style={{ fontSize: 12, color: "#4A5568" }}>{r.title}</div>
+                    <div><span style={{ fontSize: 11, fontWeight: 700, color: stColor(r.status), background: stBg(r.status), padding: "3px 10px", borderRadius: 999 }}>{stLabel(r.status)}</span></div>
+                    <div style={{ fontSize: 11, color: r.status === ST.REJECTED ? "#E04848" : SUB, fontWeight: r.status === ST.REJECTED ? 700 : 500 }}>{stNote(r.status)}</div>
+                    <div style={{ fontSize: 11, color: SUB }}>{r.submitted_at ? fmtTime(r.submitted_at) : "-"}</div>
+                    <div>
+                      {r.proof_id && <button onClick={function() { deleteRecord(r); }} style={btnSmall({ background: "#FDECEC", color: "#E04848", padding: "4px 8px", fontSize: 11 })}>삭제</button>}
                     </div>
-                    {st === ST.NONE && <span style={pill(C.miss, C.missSoft, 11)}>미인증</span>}
-                    {st === ST.REJECTED && <span style={pill(C.miss, C.missSoft, 11)}>반려됨</span>}
-                    {summary && st !== ST.NONE && <span style={pill(toneInk(summary.tone), toneBg(summary.tone), 10)}>{summary.label}</span>}
-                    {p && <button style={{ ...ghostBtn(), padding: "6px 10px" }} onClick={() => setZoom(p)}>캡처 보기</button>}
-                    {st === ST.APPROVED && <span style={pill("#fff", C.done, 11)}>수행</span>}
                   </div>
                 );
               })}
             </div>
-          </div>
-        )
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function StatMini(props) {
+  return (
+    <div style={{ textAlign: "center", padding: 10, background: "#F8FAFF", borderRadius: 10 }}>
+      <div style={{ fontSize: 11, color: SUB, fontWeight: 600 }}>{props.label}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: props.color, marginTop: 2 }}>{props.value}</div>
+    </div>
+  );
+}
+
+/* ─── 관리자 인증 현황 (개별 삭제 포함) ─── */
+function AdminCerts() {
+  var today = todayKST();
+  var _selDate = useState(today), selDate = _selDate[0], setSelDate = _selDate[1];
+  var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+  var _zoom = useState(null), zoom = _zoom[0], setZoom = _zoom[1];
+
+  var load = useCallback(async function(date) {
+    setLoading(true);
+    var r1 = await supabase.from("missions").select("*").eq("mission_date", date).maybeSingle();
+    setMission(r1.data || null);
+    if (r1.data) {
+      var r2 = await supabase.from("proofs").select("*").eq("mission_date", date);
+      setProofs(r2.data || []);
+    } else { setProofs([]); }
+    setLoading(false);
+  }, []);
+
+  useEffect(function() { load(selDate); }, [load, selDate]);
+
+  async function decide(proof, status) {
+    if (status === ST.APPROVED && proof.proof_file_path) {
+      await supabase.storage.from(PROOF_BUCKET).remove([proof.proof_file_path]);
+      await supabase.from("proofs").update({ status: status, proof_image_url: null, proof_file_path: null }).eq("id", proof.id);
+    } else {
+      await supabase.from("proofs").update({ status: status }).eq("id", proof.id);
+    }
+    await load(selDate);
+  }
+
+  async function deleteProof(proof) {
+    if (!confirm(proof.member_name + "의 인증 기록을 삭제하시겠습니까?")) return;
+    if (proof.proof_file_path) await supabase.storage.from(PROOF_BUCKET).remove([proof.proof_file_path]);
+    await supabase.from("proofs").delete().eq("id", proof.id);
+    await load(selDate);
+  }
+
+  var approved = proofs.filter(function(p) { return p.status === ST.APPROVED; }).length;
+  var pending = proofs.filter(function(p) { return p.status === ST.PENDING; }).length;
+
+  return (
+    <div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 16 }}>인증 현황</div>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18 }}>
+        <AField label="날짜 선택">
+          <input style={Object.assign({}, aInput(), { width: 180 })} type="date" value={selDate} onChange={function(e) { setSelDate(e.target.value); }} />
+        </AField>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#10A26A", background: "#E6F8EF", padding: "5px 14px", borderRadius: 999 }}>완료 {approved}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: BLUE, background: "#E8F0FE", padding: "5px 14px", borderRadius: 999 }}>대기 {pending}</span>
+        </div>
+      </div>
+
+      {loading ? <div style={{ color: SUB }}>불러오는 중...</div> :
+       !mission ? <div style={{ color: SUB }}>해당 날짜의 미션이 없습니다.</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(mission.assignees || []).map(function(k) {
+            var proof = proofs.find(function(p) { return p.member_key === k; });
+            var parts = k.split("|");
+            var status = proof ? proof.status : "none";
+            return (
+              <div key={k} style={card({ display: "flex", alignItems: "center", gap: 14, padding: 16 })}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(135deg,#3B72E8,#5A8EF5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, flexShrink: 0 }}>{parts[0].slice(0, 1)}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800 }}>{parts[0]}</div>
+                  <div style={{ fontSize: 12, color: SUB }}>{parts[1] + " · " + parts[2]}</div>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: stColor(status), background: stBg(status), padding: "5px 14px", borderRadius: 999 }}>{stLabel(status)}</span>
+                {proof && proof.proof_image_url && (
+                  <button onClick={function() { setZoom(proof); }} style={btnSmall({ background: "#F0F4FB", color: BLUE })}>캡처 보기</button>
+                )}
+                {proof && proof.status === ST.PENDING && (
+                  <>
+                    <button onClick={function() { decide(proof, ST.APPROVED); }} style={btnSmall({ background: "#10A26A", color: "#fff" })}>승인</button>
+                    <button onClick={function() { decide(proof, ST.REJECTED); }} style={btnSmall({ background: "#E04848", color: "#fff" })}>반려</button>
+                  </>
+                )}
+                {proof && (
+                  <button onClick={function() { deleteProof(proof); }} style={btnSmall({ background: "#FDECEC", color: "#E04848" })}>삭제</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {zoom && (
-        <div onClick={() => setZoom(null)} style={{ position: "fixed", inset: 0, background: "rgba(30,30,50,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: 16, maxWidth: 520, width: "100%" }}>
-            <img src={zoom.image_url} alt="인증 캡처" style={{ width: "100%", borderRadius: 10 }} />
-            {zoom.link && <a href={zoom.link} target="_blank" rel="noreferrer" style={{ color: C.blue, fontSize: 13, fontWeight: 500 }}>{zoom.link}</a>}
-            {zoom.memo && <div style={{ fontSize: 13, fontWeight: 500, color: C.sub, marginTop: 4 }}>메모: {zoom.memo}</div>}
-            <button style={ghostBtn({ width: "100%", marginTop: 12 })} onClick={() => setZoom(null)}>닫기</button>
-          </div>
+        <Modal onClose={function() { setZoom(null); }} maxWidth={560}>
+          <img src={zoom.proof_image_url} alt="인증 캡처" style={{ width: "100%", borderRadius: 12, maxHeight: 500, objectFit: "contain" }} />
+          <div style={{ marginTop: 12, fontSize: 13, color: SUB }}>제출: {fmtTime(zoom.submitted_at)} · {zoom.member_name}</div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function AdminUncert() {
+  var today = todayKST();
+  var _mission = useState(null), mission = _mission[0], setMission = _mission[1];
+  var _proofs = useState([]), proofs = _proofs[0], setProofs = _proofs[1];
+  var _members = useState([]), members = _members[0], setMembers = _members[1];
+  var _loading = useState(true), loading = _loading[0], setLoading = _loading[1];
+
+  useEffect(function() {
+    (async function() {
+      setLoading(true);
+      var r1 = await supabase.from("missions").select("*").eq("mission_date", today).maybeSingle();
+      setMission(r1.data || null);
+      var r2 = await supabase.from("members").select("*");
+      setMembers(r2.data || []);
+      if (r1.data) {
+        var r3 = await supabase.from("proofs").select("*").eq("mission_date", today);
+        setProofs(r3.data || []);
+      }
+      setLoading(false);
+    })();
+  }, [today]);
+
+  if (loading) return <div style={{ color: SUB }}>불러오는 중...</div>;
+  if (!mission) return (
+    <div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 8 }}>미인증자 관리</div>
+      <div style={{ color: SUB, fontSize: 14 }}>오늘 등록된 미션이 없습니다.</div>
+    </div>
+  );
+
+  var assignees = (mission.assignees || []).map(function(k) { return members.find(function(m) { return keyOf(m) === k; }) || { name: k.split("|")[0], gi: k.split("|")[1], school: k.split("|")[2] }; });
+  var uncertified = assignees.filter(function(m) {
+    var p = proofs.find(function(p) { return p.member_key === keyOf(m); });
+    return !p || p.status !== ST.APPROVED;
+  });
+
+  return (
+    <div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: INK, marginBottom: 8 }}>미인증자 관리</div>
+      <div style={{ fontSize: 13, color: SUB, marginBottom: 20 }}>오늘 미션: {mission.title} · 미인증 {uncertified.length}명</div>
+
+      {uncertified.length === 0 ? (
+        <div style={card({ textAlign: "center", padding: 30 })}>
+          <div style={{ marginBottom: 10, display: "flex", justifyContent: "center" }}><IconParty /></div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#10A26A" }}>모든 담당자가 인증을 완료했습니다!</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {uncertified.map(function(m) {
+            var p = proofs.find(function(p) { return p.member_key === keyOf(m); });
+            var status = p ? p.status : "none";
+            return (
+              <div key={keyOf(m)} style={card({ display: "flex", alignItems: "center", gap: 14, padding: 16, background: status === "none" || status === ST.REJECTED ? "#FFF5F5" : "#FFF" })}>
+                <IconDot color={status === ST.PENDING ? "#3B72E8" : "#E04848"} size={16} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: INK }}>{m.name}</div>
+                  <div style={{ fontSize: 12, color: SUB }}>{m.gi + " · " + m.school}</div>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: stColor(status), background: stBg(status), padding: "5px 14px", borderRadius: 999 }}>{stLabel(status)}</span>
+                {status === ST.REJECTED && (
+                  <span style={{ fontSize: 11, color: "#E04848", fontWeight: 600 }}>사진 반려됨</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-
-function Loading() {
-  return <div style={{ ...glassCard(), textAlign: "center", fontSize: 14, fontWeight: 600, color: C.sub, position: "relative", zIndex: 1 }}>불러오는 중...</div>;
-}
-function fmt(iso) { try { return new Date(iso).toLocaleString("ko-KR"); } catch { return ""; } }
-function SectionTitle({ children }) { return <h2 style={{ fontSize: 16, fontWeight: 800, color: C.ink, margin: "0 0 12px" }}>{children}</h2>; }
-function Field({ label, children }) { return <div style={{ marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: C.sub2, marginBottom: 6 }}>{label}</div>{children}</div>; }
-function Metric({ label, value, color }) {
+/* ════════════════════════════════════════════════
+   공통 UI
+═══════════════════════════════════════════════════ */
+function Modal(props) {
   return (
-    <div style={{ flex: 1, background: C.white78, border: "0.5px solid rgba(255,255,255,0.95)", borderRadius: 14, padding: 13 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.sub2 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: color || C.ink, marginTop: 3 }}>{value}</div>
+    <div onClick={props.onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 24 }}>
+      <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 22, padding: 24, maxWidth: props.maxWidth || 520, width: "100%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        {props.children}
+        <div style={{ marginTop: 18, textAlign: "right" }}>
+          <button style={btnGhost({ width: "auto", padding: "10px 24px" })} onClick={props.onClose}>닫기</button>
+        </div>
+      </div>
     </div>
   );
 }
-function Tab({ active, children, onClick }) {
-  return <button onClick={onClick} style={{ border: "none", cursor: "pointer", fontFamily: FONT, fontSize: 13, fontWeight: active ? 800 : 700, color: active ? "#fff" : "#7886a0", background: active ? "#2a3550" : "rgba(255,255,255,0.55)", padding: "8px 15px", borderRadius: 999 }}>{children}</button>;
+function PageHeader(props) {
+  return <div style={{ display: "flex", alignItems: "center", padding: "22px 0 18px" }}><div style={{ fontSize: 20, fontWeight: 800, color: INK }}>{props.title}</div></div>;
 }
-function pill(fg, bg, fs = 11) { return { display: "inline-block", fontSize: fs, fontWeight: 700, color: fg, background: bg, padding: "4px 10px", borderRadius: 999 }; }
-const toneInk = (t) => (t === "done" ? C.done : t === "warn" ? C.warn : C.miss);
-const toneBg = (t) => (t === "done" ? C.doneSoft : t === "warn" ? C.warnSoft : C.missSoft);
-function glassCard(opacity = 0.78) {
-  return { background: `rgba(255,255,255,${opacity})`, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: "0.5px solid rgba(255,255,255,0.95)", borderRadius: 22, padding: 22, boxShadow: "0 10px 32px rgba(110,140,190,0.15)" };
+function CenteredMsg(props) { return <div style={{ padding: "60px 24px", textAlign: "center", fontSize: 15, color: SUB }}>{props.msg}</div>; }
+function AField(props) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: SUB, marginBottom: 6 }}>{props.label}</div>
+      {props.children}
+    </div>
+  );
 }
-function input() { return { width: "100%", boxSizing: "border-box", border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", fontSize: 14, fontWeight: 600, fontFamily: FONT, color: C.ink, background: "#fff", outline: "none" }; }
-function baseBtn(extra) { return { border: "none", borderRadius: 14, padding: "14px 16px", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: FONT, ...extra }; }
-function primaryBtn(extra) { return baseBtn({ color: "#fff", background: "linear-gradient(95deg,#5a86c9,#7ba0d8)", boxShadow: "0 6px 18px rgba(90,134,201,0.3)", ...extra }); }
-function dangerBtn(extra) { return baseBtn({ color: "#fff", background: C.rose, padding: "13px 18px", fontSize: 14, ...extra }); }
-function ghostBtn(extra) { return { border: `1px solid ${C.line}`, background: "rgba(255,255,255,0.6)", color: C.sub, borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT, ...extra }; }
-function miniBtn(color) { return { border: "none", borderRadius: 999, padding: "5px 13px", fontSize: 11, fontWeight: 800, color: "#fff", background: color, cursor: "pointer", fontFamily: FONT }; }
+function Planet(props) { return <div style={Object.assign({ position: "absolute", borderRadius: "50%", boxShadow: "inset -8px -8px 16px rgba(0,0,0,0.08), 0 4px 12px rgba(60,100,200,0.1)", pointerEvents: "none" }, props.style)} />; }
+function Orb(props) {
+  return (
+    <div style={Object.assign({
+      position: "absolute",
+      borderRadius: "50%",
+      background: "radial-gradient(circle at 32% 28%, #FFFFFF 0%, #B8D0F4 35%, #6FA3F0 100%)",
+      boxShadow: "inset -3px -5px 10px rgba(60,100,200,0.25), 0 8px 20px rgba(60,100,200,0.18)",
+      pointerEvents: "none"
+    }, props.style)} />
+  );
+}
+function YellowOrb(props) {
+  return (
+    <div style={Object.assign({ position: "absolute", pointerEvents: "none", width: props.style.width }, props.style)}>
+      <div style={{
+        width: "100%", paddingBottom: "100%", borderRadius: "50%",
+        background: "radial-gradient(circle at 30% 28%, #FFFFFF 0%, #FDE8B2 30%, #F4B860 100%)",
+        boxShadow: "inset -3px -5px 10px rgba(180,120,30,0.2), 0 8px 20px rgba(244,184,96,0.25)"
+      }} />
+    </div>
+  );
+}
+function SaturnOrb(props) {
+  var w = props.style.width || 130;
+  return (
+    <div style={Object.assign({ position: "absolute", pointerEvents: "none", width: w }, props.style)}>
+      <svg viewBox="0 0 140 100" width={w} height={w * 100 / 140}>
+        <defs>
+          <radialGradient id="satplanet" cx="0.32" cy="0.28">
+            <stop offset="0%" stopColor="#FFFFFF"/>
+            <stop offset="35%" stopColor="#FDE8B2"/>
+            <stop offset="100%" stopColor="#F4B860"/>
+          </radialGradient>
+          <linearGradient id="satring" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#E8D4A3" stopOpacity="0.4"/>
+            <stop offset="50%" stopColor="#FBF1DC" stopOpacity="0.9"/>
+            <stop offset="100%" stopColor="#E8D4A3" stopOpacity="0.4"/>
+          </linearGradient>
+        </defs>
+        {/* 뒤쪽 고리 */}
+        <path d="M 12 52 Q 70 22 128 52" fill="none" stroke="url(#satring)" strokeWidth="6" />
+        {/* 행성 본체 */}
+        <circle cx="70" cy="50" r="38" fill="url(#satplanet)" />
+        {/* 앞쪽 고리 */}
+        <path d="M 12 52 Q 70 82 128 52" fill="none" stroke="url(#satring)" strokeWidth="6" />
+      </svg>
+    </div>
+  );
+}
+function SaturnRing(props) {
+  return (
+    <div style={Object.assign({ position: "absolute", pointerEvents: "none" }, props.style)}>
+      <svg width="120" height="80" viewBox="0 0 120 80">
+        <defs>
+          <radialGradient id="sat" cx="0.4" cy="0.4">
+            <stop offset="0%" stopColor="#FDE8B2" />
+            <stop offset="100%" stopColor="#F4B860" />
+          </radialGradient>
+        </defs>
+        <ellipse cx="60" cy="40" rx="50" ry="14" fill="none" stroke="#E8D4A3" strokeWidth="3" opacity="0.6" />
+        <circle cx="60" cy="40" r="28" fill="url(#sat)" />
+      </svg>
+    </div>
+  );
+}
+function IconInput(props) {
+  return (
+    <div style={{ position: "relative" }}>
+      <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#9AA3B2", display: "flex" }}>{props.icon}</span>
+      <input style={Object.assign({}, inputSt(), props.right ? { paddingRight: 50 } : {})}
+        type={props.type || "text"} value={props.value} placeholder={props.placeholder}
+        onChange={function(e) { props.onChange(e.target.value); }}
+        onKeyDown={function(e) { if (e.key === "Enter" && props.onEnter) props.onEnter(); }} />
+      {props.right && <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)" }}>{props.right}</span>}
+    </div>
+  );
+}
+
+function card(extra) { return Object.assign({ background: "rgba(255,255,255,0.75)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderRadius: 24, padding: 20, boxShadow: "0 8px 32px rgba(100,120,255,0.08)" }, extra); }
+function inputSt() { return { width: "100%", boxSizing: "border-box", border: "none", borderRadius: 22, padding: "18px 20px 18px 38px", fontSize: 15, fontFamily: FONT, color: INK, background: "rgba(255,255,255,0.92)", outline: "none", boxShadow: "0 4px 14px rgba(60,100,200,0.08)" }; }
+function aInput() { return { width: "100%", boxSizing: "border-box", border: "1px solid #DDE4F0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontFamily: FONT, color: INK, background: "#fff", outline: "none" }; }
+function btnPrimary(extra) { return Object.assign({ border: "none", borderRadius: 14, padding: "15px 0", fontSize: 16, fontWeight: 800, cursor: "pointer", fontFamily: FONT, width: "100%", background: "linear-gradient(135deg,#5C8AE8,#3B72E8)", color: "#fff", boxShadow: "0 8px 22px rgba(59,114,232,0.35)" }, extra); }
+function btnGhost(extra) { return Object.assign({ border: "1px solid #E5EAF2", borderRadius: 14, padding: "13px 0", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: FONT, width: "100%", background: "#F8FAFF", color: SUB }, extra); }
+function btnSmall(extra) { return Object.assign({ border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: FONT }, extra); }
+
+/* ════════════════════════════════════════════════
+   SVG ICONS (입체감 있는 3D 풍 + 평면 라인)
+═══════════════════════════════════════════════════ */
+function IconUser() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
+function IconCap() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>; }
+function IconSchool() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9h1m4 0h1M9 13h1m4 0h1M9 17h6"/></svg>; }
+function IconLock() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>; }
+function IconEye() { return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>; }
+function IconEyeOff() { return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>; }
+function IconHelp() { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A96AB" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12" y2="17"/></svg>; }
+function IconHand() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="#FBBF24" stroke="none"><path d="M12 2c-1.1 0-2 .9-2 2v7H8V6c0-1.1-.9-2-2-2s-2 .9-2 2v10c0 3.3 2.7 6 6 6h2c3.3 0 6-2.7 6-6V8c0-1.1-.9-2-2-2s-2 .9-2 2v3h-2V4c0-1.1-.9-2-2-2z"/></svg>; }
+function IconBell(props) { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={props.color || "#1A2340"} strokeWidth="2" strokeLinecap="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>; }
+function IconClock(props) { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={props.color || "currentColor"} strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>; }
+function IconCheck(props) { return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={props.color || "#10A26A"} strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>; }
+function IconDot(props) { return <span style={{ display: "inline-block", width: props.size || 10, height: props.size || 10, borderRadius: "50%", background: props.color }} />; }
+function IconAttach(props) { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={props.color || "currentColor"} strokeWidth="2" strokeLinecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>; }
+function IconDownload() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>; }
+function IconInbox() {
+  return (
+    <svg width="56" height="56" viewBox="0 0 56 56">
+      <defs>
+        <linearGradient id="ibg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#C5D8FB"/><stop offset="100%" stopColor="#6FA3F0"/></linearGradient>
+      </defs>
+      <rect x="6" y="14" width="44" height="32" rx="6" fill="url(#ibg)"/>
+      <path d="M6 28h12l4 5h12l4-5h12" stroke="#fff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function IconLockBig() {
+  return (
+    <svg width="56" height="56" viewBox="0 0 56 56">
+      <defs>
+        <linearGradient id="lbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#C5D8FB"/><stop offset="100%" stopColor="#6FA3F0"/></linearGradient>
+      </defs>
+      <rect x="10" y="24" width="36" height="26" rx="5" fill="url(#lbg)"/>
+      <path d="M16 24v-6a12 12 0 0124 0v6" stroke="#6FA3F0" strokeWidth="4" fill="none" strokeLinecap="round"/>
+      <circle cx="28" cy="37" r="4" fill="#fff"/>
+    </svg>
+  );
+}
+function IconParty() {
+  return (
+    <svg width="56" height="56" viewBox="0 0 56 56">
+      <defs>
+        <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#3DC489"/><stop offset="100%" stopColor="#10A26A"/></linearGradient>
+      </defs>
+      <circle cx="28" cy="28" r="22" fill="url(#pg)"/>
+      <polyline points="18 28 25 35 38 21" stroke="#fff" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx="48" cy="10" r="2" fill="#FBBF24"/>
+      <circle cx="8" cy="14" r="2" fill="#3B72E8"/>
+      <circle cx="50" cy="46" r="2" fill="#E04848"/>
+    </svg>
+  );
+}
+function CheckMarkBig() {
+  return (
+    <svg width="110" height="110" viewBox="0 0 110 110">
+      <defs>
+        <linearGradient id="cmg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#3DC489"/><stop offset="100%" stopColor="#10A26A"/></linearGradient>
+      </defs>
+      <circle cx="55" cy="55" r="44" fill="url(#cmg)"/>
+      <polyline points="37 55 50 68 75 42" stroke="#fff" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+      <rect x="90" y="20" width="6" height="6" fill="#FBBF24" transform="rotate(45 93 23)"/>
+      <rect x="12" y="30" width="5" height="5" fill="#3B72E8" transform="rotate(45 14.5 32.5)"/>
+      <rect x="95" y="80" width="5" height="5" fill="#E04848" transform="rotate(45 97.5 82.5)"/>
+      <rect x="8" y="78" width="6" height="6" fill="#3DC489" transform="rotate(45 11 81)"/>
+    </svg>
+  );
+}
+function CameraIcon(props) {
+  var s = props && props.size || 32;
+  return (
+    <svg width={s} height={s} viewBox="0 0 64 64">
+      <defs>
+        <linearGradient id="camg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#A8C4F8"/><stop offset="100%" stopColor="#3B72E8"/></linearGradient>
+        <radialGradient id="camLens" cx="0.4" cy="0.4"><stop offset="0%" stopColor="#fff"/><stop offset="100%" stopColor="#3B72E8"/></radialGradient>
+      </defs>
+      <rect x="6" y="20" width="52" height="36" rx="6" fill="url(#camg)"/>
+      <rect x="22" y="14" width="20" height="10" rx="2" fill="#5A8EF5"/>
+      <circle cx="32" cy="38" r="11" fill="url(#camLens)"/>
+      <circle cx="32" cy="38" r="6" fill="#1A2340" opacity="0.7"/>
+    </svg>
+  );
+}
+function MegaphoneBig() {
+  return (
+    <svg width="240" height="180" viewBox="0 0 240 180">
+      <defs>
+        <linearGradient id="mgBody" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#7BA5F2"/>
+          <stop offset="100%" stopColor="#3B72E8"/>
+        </linearGradient>
+        <linearGradient id="mgBell" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FFFFFF"/>
+          <stop offset="100%" stopColor="#C5D8FB"/>
+        </linearGradient>
+        <linearGradient id="mgHandle" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#5A8EF5"/>
+          <stop offset="100%" stopColor="#3B72E8"/>
+        </linearGradient>
+        <linearGradient id="mgYellow" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FFD97A"/>
+          <stop offset="100%" stopColor="#F4B860"/>
+        </linearGradient>
+      </defs>
+      {/* 그림자 */}
+      <ellipse cx="130" cy="170" rx="80" ry="6" fill="#1A2340" opacity="0.08"/>
+      {/* 본체 (왼쪽 좁고 오른쪽 넓어지는 메가폰) */}
+      <path d="M75 75 Q70 75 70 80 L70 110 Q70 115 75 115 L120 110 L120 80 Z" fill="url(#mgBody)"/>
+      {/* 메가폰 입구 (큰 종) */}
+      <ellipse cx="160" cy="95" rx="55" ry="50" fill="url(#mgBell)"/>
+      <ellipse cx="160" cy="95" rx="55" ry="50" fill="none" stroke="#3B72E8" strokeWidth="3"/>
+      {/* 메가폰 입구 안쪽 */}
+      <ellipse cx="165" cy="95" rx="32" ry="28" fill="#5A8EF5"/>
+      <ellipse cx="170" cy="92" rx="22" ry="18" fill="#3B72E8"/>
+      {/* 본체 → 종 연결부 */}
+      <path d="M120 75 L120 115 L160 110 L160 80 Z" fill="url(#mgBody)"/>
+      {/* 노란색 트리거 */}
+      <circle cx="70" cy="78" r="10" fill="url(#mgYellow)"/>
+      <rect x="60" y="65" width="8" height="8" rx="2" fill="url(#mgYellow)"/>
+      {/* 손잡이 */}
+      <path d="M85 115 L85 145 Q85 155 95 155 L105 155 Q115 155 115 145 L115 115 Z" fill="url(#mgHandle)"/>
+      {/* 입구 하이라이트 */}
+      <ellipse cx="140" cy="80" rx="10" ry="5" fill="#fff" opacity="0.6"/>
+      {/* 작은 장식 점들 */}
+      <circle cx="225" cy="65" r="4" fill="#3B72E8" opacity="0.5"/>
+      <circle cx="218" cy="50" r="3" fill="#7BA5F2" opacity="0.5"/>
+    </svg>
+  );
+}
+function MegaphoneSmall() {
+  return (
+    <svg width="100" height="80" viewBox="0 0 240 180">
+      <path d="M75 75 Q70 75 70 80 L70 110 Q70 115 75 115 L120 110 L120 80 Z" fill="#fff" opacity="0.7"/>
+      <ellipse cx="160" cy="95" rx="55" ry="50" fill="#fff" opacity="0.9"/>
+      <ellipse cx="165" cy="95" rx="32" ry="28" fill="#3B72E8" opacity="0.5"/>
+      <circle cx="70" cy="78" r="10" fill="#FBBF24"/>
+      <path d="M85 115 L85 145 Q85 155 95 155 L105 155 Q115 155 115 145 L115 115 Z" fill="#fff" opacity="0.7"/>
+    </svg>
+  );
+}
+function SirenSmall() {
+  return (
+    <svg width="70" height="70" viewBox="0 0 70 70">
+      <defs>
+        <linearGradient id="srn" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#FF8080"/><stop offset="100%" stopColor="#E04848"/></linearGradient>
+      </defs>
+      <ellipse cx="35" cy="60" rx="22" ry="4" fill="#1A2340" opacity="0.15"/>
+      <rect x="14" y="46" width="42" height="10" rx="3" fill="#5A6680"/>
+      <path d="M18 46 L22 22 Q22 14 35 14 Q48 14 48 22 L52 46 Z" fill="url(#srn)"/>
+      <ellipse cx="35" cy="20" rx="10" ry="4" fill="#FF9F9F"/>
+      <circle cx="35" cy="10" r="3" fill="#FBBF24"/>
+    </svg>
+  );
+}
+function IconClipboard() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32">
+      <defs><linearGradient id="cbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#7BA5F2"/><stop offset="100%" stopColor="#3B72E8"/></linearGradient></defs>
+      <rect x="6" y="6" width="20" height="22" rx="3" fill="url(#cbg)"/>
+      <rect x="10" y="3" width="12" height="5" rx="1.5" fill="#5A6680"/>
+      <line x1="11" y1="14" x2="21" y2="14" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+      <line x1="11" y1="18" x2="21" y2="18" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+      <line x1="11" y1="22" x2="17" y2="22" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+function IconUsers() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32">
+      <defs><linearGradient id="ug" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#7BA5F2"/><stop offset="100%" stopColor="#3B72E8"/></linearGradient></defs>
+      <circle cx="12" cy="11" r="5" fill="url(#ug)"/>
+      <path d="M3 27c0-5 4-8 9-8s9 3 9 8" fill="url(#ug)"/>
+      <circle cx="22" cy="13" r="4" fill="#A8C4F8"/>
+      <path d="M18 27c0-3.5 2-6 6-6s5 2 5 5" fill="#A8C4F8"/>
+    </svg>
+  );
+}
+function IconSiren() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32">
+      <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#FF8080"/><stop offset="100%" stopColor="#E04848"/></linearGradient></defs>
+      <rect x="6" y="22" width="20" height="5" rx="1.5" fill="#5A6680"/>
+      <path d="M9 22 L11 12 Q11 6 16 6 Q21 6 21 12 L23 22 Z" fill="url(#sg)"/>
+      <ellipse cx="16" cy="10" rx="5" ry="2" fill="#FFB8B8"/>
+      <circle cx="16" cy="4" r="2" fill="#FBBF24"/>
+    </svg>
+  );
+}
+function IconCheckCircle() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32">
+      <defs><linearGradient id="ccg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#3DC489"/><stop offset="100%" stopColor="#10A26A"/></linearGradient></defs>
+      <circle cx="16" cy="16" r="12" fill="url(#ccg)"/>
+      <polyline points="10 16 14 20 22 12" stroke="#fff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function NavHome() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>; }
+function NavCheck() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="8 12 11 15 16 9"/></svg>; }
+function NavList() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>; }
+function NavUser() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>; }
+function NavWarn() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="1"/></svg>; }
