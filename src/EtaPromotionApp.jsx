@@ -123,7 +123,7 @@ function LoginPage(props) {
       <div style={{ fontSize: 13, color: "#8093B8", marginBottom: 14, fontWeight: 500 }}>Academic Alliance</div>
       <div style={{ fontSize: 17, fontWeight: 800, color: INK, marginBottom: 6, letterSpacing: -0.5 }}>홍보 활동 인증 시스템</div>
 
-      <div style={{ marginTop: 0, marginBottom: 4, display: "flex", justifyContent: "center", position: "relative" }}>
+      <div style={{ marginTop: -85, marginBottom: -120, display: "flex", justifyContent: "center", position: "relative" }}>
         <img src={megaphoneImg} alt="" style={{ width: "100%", maxWidth: isDesktop ? 380 : 340, height: "auto", filter: "drop-shadow(0 20px 28px rgba(60,100,200,0.22))", animation: "floaty 4s ease-in-out infinite" }} />
         <div style={{ position: "absolute", bottom: -4, left: "50%", transform: "translateX(-50%)", width: "50%", height: 14, background: "radial-gradient(ellipse, rgba(60,100,200,0.22) 0%, transparent 70%)", filter: "blur(5px)" }} />
       </div>
@@ -155,7 +155,7 @@ function LoginPage(props) {
         관리자 코드는 관리자에게 문의하세요. <IconHelp />
       </div>
       <div style={{ fontSize: 11, color: "#A8B2C5", marginTop: 8, lineHeight: 1.5 }}>
-        ※ 세부 캠퍼스(예: 세종캠퍼스)는 학교명만 입력해도 됩니다.
+        ※ 세부 캠퍼스는 학교명만 입력해도 됩니다.
       </div>
     </>
   );
